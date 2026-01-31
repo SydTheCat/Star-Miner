@@ -23,7 +23,11 @@ var selected_block: int = BlockTypes.BLOCK_DIRT
 @onready var world_env: WorldEnvironment = $WorldEnvironment
 var sky_material: ProceduralSkyMaterial
 var time_of_day: float = 0.3  # 0.0 = midnight, 0.5 = noon, 1.0 = midnight again
-var day_length: float = 240.0  # Seconds for a full day cycle
+var day_length: float = 480.0  # Seconds for a full day cycle (8 minutes)
+
+# Clouds.
+var cloud_mesh: MeshInstance3D
+var cloud_material: ShaderMaterial
 
 
 func _ready() -> void:
@@ -59,6 +63,39 @@ func _ready() -> void:
 
 	# Create debug UI.
 	_create_debug_ui()
+	
+	# Create cloud layer.
+	_create_clouds()
+
+
+func _create_clouds() -> void:
+	cloud_mesh = MeshInstance3D.new()
+	cloud_mesh.name = "Clouds"
+	add_child(cloud_mesh)
+	
+	# Create a large plane for clouds.
+	var plane := PlaneMesh.new()
+	plane.size = Vector2(500, 500)
+	plane.subdivide_width = 1
+	plane.subdivide_depth = 1
+	cloud_mesh.mesh = plane
+	
+	# Create cloud shader material.
+	cloud_material = ShaderMaterial.new()
+	var shader := load("res://Shaders/clouds.gdshader") as Shader
+	cloud_material.shader = shader
+	cloud_material.set_shader_parameter("cloud_speed", 0.005)
+	cloud_material.set_shader_parameter("cloud_scale", 20.0)
+	cloud_material.set_shader_parameter("cloud_coverage", 0.45)
+	cloud_material.set_shader_parameter("cloud_softness", 0.25)
+	cloud_material.set_shader_parameter("cloud_color", Color(1.0, 1.0, 1.0, 0.85))
+	cloud_mesh.material_override = cloud_material
+	
+	# Position clouds high in sky.
+	cloud_mesh.position.y = 80.0
+	
+	# Disable shadows from clouds.
+	cloud_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 
 func _create_debug_ui() -> void:
@@ -81,6 +118,7 @@ func _process(delta: float) -> void:
 	_update_day_night_cycle(delta)
 	_update_debug_ui()
 	_update_target_block()
+	_update_clouds()
 
 
 func _update_day_night_cycle(delta: float) -> void:
@@ -194,6 +232,33 @@ func _update_debug_ui() -> void:
 		"Chunks loaded: %d\n" % voxel_world.get_chunk_count() +
 		"[R] Regenerate world"
 	)
+
+
+func _update_clouds() -> void:
+	if cloud_mesh == null or player == null or cloud_material == null:
+		return
+	
+	# Follow player horizontally.
+	cloud_mesh.position.x = player.global_position.x
+	cloud_mesh.position.z = player.global_position.z
+	
+	# Tint clouds based on time of day.
+	var hour: float = fmod(time_of_day * 24.0 + 6.0, 24.0)
+	var cloud_tint := Color(1.0, 1.0, 1.0, 0.85)
+	
+	if hour >= 6.0 and hour < 8.0:
+		# Sunrise - orange tint.
+		var t := (hour - 6.0) / 2.0
+		cloud_tint = Color(1.0, 0.85 + 0.15 * t, 0.7 + 0.3 * t, 0.85)
+	elif hour >= 18.0 and hour < 20.0:
+		# Sunset - orange/pink tint.
+		var t := (hour - 18.0) / 2.0
+		cloud_tint = Color(1.0, 0.85 - 0.1 * t, 0.7 - 0.1 * t, 0.85)
+	elif hour >= 20.0 or hour < 6.0:
+		# Night - darker, less visible.
+		cloud_tint = Color(0.3, 0.3, 0.4, 0.4)
+	
+	cloud_material.set_shader_parameter("cloud_color", cloud_tint)
 
 
 func _unhandled_input(event: InputEvent) -> void:

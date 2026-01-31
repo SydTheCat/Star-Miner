@@ -170,8 +170,8 @@ func _generate_terrain(chunk: Node3D) -> void:
 
 			# Sample noise to get height (range roughly -1 to 1, scale to usable height).
 			var noise_val: float = noise.get_noise_2d(float(world_x), float(world_z))
-			# Map noise to height: base height 20, variation +/- 15.
-			var height: int = int(20.0 + noise_val * 15.0)
+			# Map noise to height: base height 20, variation +/- 5 (flatter terrain).
+			var height: int = int(20.0 + noise_val * 5.0)
 			height = clampi(height, 1, CHUNK_SIZE_Y - 1)
 
 			for ly in CHUNK_SIZE_Y:
