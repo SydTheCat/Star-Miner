@@ -1,0 +1,12 @@
+[gd_scene load_steps=2 format=3 uid="uid://bs103gt12w3ve"]
+
+[ext_resource type="Script" uid="uid://du08at73o1iid" path="res://World/chunk.gd" id="1_ekq7i"]
+
+[node name="Chunk" type="Node3D"]
+script = ExtResource("1_ekq7i")
+
+[node name="MeshInstance" type="MeshInstance3D" parent="."]
+
+[node name="Collider" type="StaticBody3D" parent="."]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Collider"]
