@@ -13,20 +13,32 @@ const CHUNK_SIZE_Z := 16
 var chunk_coords: Vector3i = Vector3i.ZERO
 
 # Flat array: CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z.
+# Can be set directly by VoxelWorld with pre-generated data.
 var blocks: PackedInt32Array
 
 # Reference to VoxelWorld for cross-chunk neighbor queries.
 var voxel_world: Node3D = null
+
+# Deferred collision generation.
+var collision_pending: bool = false
+var cached_mesh: ArrayMesh = null
 
 @onready var mesh_instance: MeshInstance3D = $MeshInstance
 @onready var collider_shape: CollisionShape3D = $Collider/CollisionShape3D
 
 
 func _ready() -> void:
-	# Allocate storage if not already done by VoxelWorld.
+	# Allocate storage only if not already set by VoxelWorld.
 	if blocks.is_empty():
 		_allocate_block_storage()
 	# Note: update_mesh() is called by VoxelWorld after terrain generation.
+
+
+func _process(_delta: float) -> void:
+	# Handle deferred collision generation.
+	if collision_pending and cached_mesh != null:
+		_build_collision_deferred()
+		collision_pending = false
 
 
 func _allocate_block_storage() -> void:
@@ -115,38 +127,69 @@ func _block_color(block_id: int) -> Color:
 func update_mesh() -> void:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	
+	# Pre-cache block data for faster access.
+	var local_blocks := blocks
+	var size_x := CHUNK_SIZE_X
+	var size_y := CHUNK_SIZE_Y
+	var size_z := CHUNK_SIZE_Z
+	var size_xz := size_x * size_z
 
-	for y in CHUNK_SIZE_Y:
-		for z in CHUNK_SIZE_Z:
-			for x in CHUNK_SIZE_X:
-				var block_id := get_block(x, y, z)
+	for y in size_y:
+		var y_offset := y * size_xz
+		for z in size_z:
+			var z_offset := z * size_x
+			for x in size_x:
+				var index := x + z_offset + y_offset
+				var block_id: int = local_blocks[index]
 				if block_id == BlockTypes.BLOCK_AIR:
 					continue
 
 				var color := _block_color(block_id)
 
 				# Neighbor checks – add face only if neighbor is air.
-				# Use get_neighbor_block for cross-chunk boundary awareness.
-
+				# Inline neighbor checks for interior blocks (faster).
+				
 				# -X (west)
-				if get_neighbor_block(x - 1, y, z) == BlockTypes.BLOCK_AIR:
+				if x > 0:
+					if local_blocks[index - 1] == BlockTypes.BLOCK_AIR:
+						_add_face_x(st, x, y, z, false, color)
+				elif get_neighbor_block(x - 1, y, z) == BlockTypes.BLOCK_AIR:
 					_add_face_x(st, x, y, z, false, color)
+				
 				# +X (east)
-				if get_neighbor_block(x + 1, y, z) == BlockTypes.BLOCK_AIR:
+				if x < size_x - 1:
+					if local_blocks[index + 1] == BlockTypes.BLOCK_AIR:
+						_add_face_x(st, x, y, z, true, color)
+				elif get_neighbor_block(x + 1, y, z) == BlockTypes.BLOCK_AIR:
 					_add_face_x(st, x, y, z, true, color)
 
 				# -Y (down)
-				if get_neighbor_block(x, y - 1, z) == BlockTypes.BLOCK_AIR:
+				if y > 0:
+					if local_blocks[index - size_xz] == BlockTypes.BLOCK_AIR:
+						_add_face_y(st, x, y, z, false, color)
+				elif get_neighbor_block(x, y - 1, z) == BlockTypes.BLOCK_AIR:
 					_add_face_y(st, x, y, z, false, color)
+				
 				# +Y (up)
-				if get_neighbor_block(x, y + 1, z) == BlockTypes.BLOCK_AIR:
+				if y < size_y - 1:
+					if local_blocks[index + size_xz] == BlockTypes.BLOCK_AIR:
+						_add_face_y(st, x, y, z, true, color)
+				elif get_neighbor_block(x, y + 1, z) == BlockTypes.BLOCK_AIR:
 					_add_face_y(st, x, y, z, true, color)
 
 				# -Z (north)
-				if get_neighbor_block(x, y, z - 1) == BlockTypes.BLOCK_AIR:
+				if z > 0:
+					if local_blocks[index - size_x] == BlockTypes.BLOCK_AIR:
+						_add_face_z(st, x, y, z, false, color)
+				elif get_neighbor_block(x, y, z - 1) == BlockTypes.BLOCK_AIR:
 					_add_face_z(st, x, y, z, false, color)
+				
 				# +Z (south)
-				if get_neighbor_block(x, y, z + 1) == BlockTypes.BLOCK_AIR:
+				if z < size_z - 1:
+					if local_blocks[index + size_x] == BlockTypes.BLOCK_AIR:
+						_add_face_z(st, x, y, z, true, color)
+				elif get_neighbor_block(x, y, z + 1) == BlockTypes.BLOCK_AIR:
 					_add_face_z(st, x, y, z, true, color)
 
 	# Index the mesh and generate proper normals.
@@ -161,15 +204,57 @@ func update_mesh() -> void:
 	mesh_instance.mesh = mesh
 	mesh_instance.material_override = material
 
-	# Build collision from the same mesh.
-	if mesh != null and mesh.get_surface_count() > 0:
-		var shape := mesh.create_trimesh_shape()
+	# Defer collision generation to next frame to spread load.
+	cached_mesh = mesh
+	collision_pending = true
+
+
+func _build_collision_deferred() -> void:
+	# Build collision from cached mesh (called from _process).
+	if cached_mesh != null and cached_mesh.get_surface_count() > 0:
+		var shape := cached_mesh.create_trimesh_shape()
 		if shape != null:
 			collider_shape.shape = shape
 		else:
 			collider_shape.shape = null
 	else:
 		collider_shape.shape = null
+	cached_mesh = null
+
+
+func apply_mesh_data(mesh_data: Dictionary) -> void:
+	# Apply pre-built mesh data from background thread (fast path).
+	# This only does the GPU upload, all vertex computation was done on worker thread.
+	var vertices: PackedVector3Array = mesh_data["vertices"]
+	var normals: PackedVector3Array = mesh_data["normals"]
+	var colors: PackedColorArray = mesh_data["colors"]
+	
+	if vertices.is_empty():
+		mesh_instance.mesh = null
+		collider_shape.shape = null
+		return
+	
+	# Build ArrayMesh directly from arrays (faster than SurfaceTool).
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_COLOR] = colors
+	
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	
+	# Create material that uses vertex colors.
+	var material := StandardMaterial3D.new()
+	material.vertex_color_use_as_albedo = true
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	
+	mesh_instance.mesh = mesh
+	mesh_instance.material_override = material
+	
+	# Defer collision to next frame.
+	cached_mesh = mesh
+	collision_pending = true
 
 
 # Helper: add a quad facing +/-X.

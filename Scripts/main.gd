@@ -21,28 +21,49 @@ var selected_block: int = BlockTypes.BLOCK_DIRT
 # Day/night cycle.
 @onready var sun: DirectionalLight3D = $Sun
 @onready var world_env: WorldEnvironment = $WorldEnvironment
-var sky_material: ProceduralSkyMaterial
+var sky_material: ShaderMaterial
 var time_of_day: float = 0.3  # 0.0 = midnight, 0.5 = noon, 1.0 = midnight again
 var day_length: float = 480.0  # Seconds for a full day cycle (8 minutes)
 
-# Clouds.
-var cloud_mesh: MeshInstance3D
-var cloud_material: ShaderMaterial
+# Voxel Clouds.
+var cloud_container: Node3D
+var cloud_mesh_instance: MeshInstance3D
+var cloud_material: StandardMaterial3D
+var cloud_noise: FastNoiseLite
+var last_cloud_center: Vector2i = Vector2i(-9999, -9999)
+const CLOUD_HEIGHT := 60.0
+const CLOUD_VOXEL_SIZE := 4.0  # Size of each cloud voxel
+const CLOUD_RADIUS := 20  # Radius in cloud voxels
+const CLOUD_UPDATE_DISTANCE := 32.0  # Rebuild clouds when player moves this far
 
 
 func _ready() -> void:
 	print("Main scene ready.")
 
-	# Make environment, sky, and material unique so we can modify them at runtime.
+	# Make environment unique and set up custom sky shader.
 	var env: Environment = world_env.environment.duplicate() as Environment
 	world_env.environment = env
-	if env.sky:
-		var sky: Sky = env.sky.duplicate() as Sky
-		env.sky = sky
-		if sky.sky_material:
-			sky_material = sky.sky_material.duplicate() as ProceduralSkyMaterial
-			sky.sky_material = sky_material
-			print("Sky material initialized: ", sky_material)
+	
+	# Create custom sky with shader material.
+	var sky := Sky.new()
+	sky_material = ShaderMaterial.new()
+	var sky_shader := load("res://Shaders/sky.gdshader") as Shader
+	sky_material.shader = sky_shader
+	
+	# Set default sky parameters.
+	sky_material.set_shader_parameter("sun_intensity", 22.0)
+	sky_material.set_shader_parameter("sun_size", 0.04)
+	sky_material.set_shader_parameter("atmosphere_density", 1.0)
+	sky_material.set_shader_parameter("rayleigh_strength", 1.0)
+	sky_material.set_shader_parameter("mie_strength", 0.005)
+	sky_material.set_shader_parameter("star_intensity", 2.5)
+	sky_material.set_shader_parameter("star_threshold", 0.97)
+	
+	sky.sky_material = sky_material
+	sky.process_mode = Sky.PROCESS_MODE_REALTIME
+	env.sky = sky
+	env.background_mode = Environment.BG_SKY
+	print("Custom sky shader initialized")
 
 	# Create voxel world.
 	voxel_world = VOXEL_WORLD_SCENE.instantiate()
@@ -69,33 +90,36 @@ func _ready() -> void:
 
 
 func _create_clouds() -> void:
-	cloud_mesh = MeshInstance3D.new()
-	cloud_mesh.name = "Clouds"
-	add_child(cloud_mesh)
+	# Container for cloud mesh.
+	cloud_container = Node3D.new()
+	cloud_container.name = "VoxelClouds"
+	add_child(cloud_container)
 	
-	# Create a large plane for clouds.
-	var plane := PlaneMesh.new()
-	plane.size = Vector2(500, 500)
-	plane.subdivide_width = 1
-	plane.subdivide_depth = 1
-	cloud_mesh.mesh = plane
+	# Cloud mesh instance.
+	cloud_mesh_instance = MeshInstance3D.new()
+	cloud_mesh_instance.name = "CloudMesh"
+	cloud_container.add_child(cloud_mesh_instance)
 	
-	# Create cloud shader material.
-	cloud_material = ShaderMaterial.new()
-	var shader := load("res://Shaders/clouds.gdshader") as Shader
-	cloud_material.shader = shader
-	cloud_material.set_shader_parameter("cloud_speed", 0.005)
-	cloud_material.set_shader_parameter("cloud_scale", 20.0)
-	cloud_material.set_shader_parameter("cloud_coverage", 0.45)
-	cloud_material.set_shader_parameter("cloud_softness", 0.25)
-	cloud_material.set_shader_parameter("cloud_color", Color(1.0, 1.0, 1.0, 0.85))
-	cloud_mesh.material_override = cloud_material
+	# Cloud material - semi-transparent white.
+	cloud_material = StandardMaterial3D.new()
+	cloud_material.albedo_color = Color(1.0, 1.0, 1.0, 0.9)
+	cloud_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	cloud_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	cloud_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	cloud_mesh_instance.material_override = cloud_material
+	cloud_mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	
-	# Position clouds high in sky.
-	cloud_mesh.position.y = 80.0
+	# Noise for cloud generation.
+	cloud_noise = FastNoiseLite.new()
+	cloud_noise.seed = 42
+	cloud_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
+	cloud_noise.frequency = 0.02
+	cloud_noise.fractal_octaves = 3
+	cloud_noise.fractal_lacunarity = 2.0
+	cloud_noise.fractal_gain = 0.5
 	
-	# Disable shadows from clouds.
-	cloud_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# Initial cloud generation.
+	_rebuild_clouds()
 
 
 func _create_debug_ui() -> void:
@@ -154,8 +178,12 @@ func _update_day_night_cycle(delta: float) -> void:
 		sun_height = -sin(night_progress * PI)  # Goes from 0 to -1 to 0
 		sun_angle = PI + night_progress * PI  # PI at sunset, 2*PI at sunrise
 
-	# Rotate sun around X axis.
+	# Rotate sun light around X axis.
 	sun.rotation = Vector3(-sun_angle + PI / 2.0, 0, 0)
+	
+	# Calculate sun direction vector for sky shader.
+	# The DirectionalLight3D shines in -Z direction, so the sun's position in sky is +Z.
+	var sun_dir := sun.global_transform.basis.z
 
 	# Adjust sun energy and visibility based on height.
 	if sun_height > -0.1:
@@ -178,37 +206,28 @@ func _update_day_night_cycle(delta: float) -> void:
 	var ambient: float = clampf(sun_height + 0.3, 0.05, 0.5)
 	env.ambient_light_energy = ambient
 
-	# Update sky colors based on time.
+	# Update sky shader parameters.
 	if sky_material == null:
 		return
-
-	# Daytime vs nighttime sky colors.
-	# sun_height: -1 at midnight, +1 at noon
-	var day_factor: float = clampf((sun_height + 1.0) / 2.0, 0.0, 1.0)  # 0 at midnight, 1 at noon
-
-	# Sky top: blue during day, nearly black at night.
-	var night_top := Color(0.01, 0.01, 0.03)
-	var day_top := Color(0.3, 0.5, 0.9)
-	sky_material.sky_top_color = night_top.lerp(day_top, day_factor)
-
-	# Sky horizon: orange at sunrise/sunset, light blue during day, dark at night.
+	
+	# Pass sun direction to sky shader.
+	sky_material.set_shader_parameter("sun_direction", sun_dir)
+	sky_material.set_shader_parameter("time_of_day", time_of_day)
+	
+	# Adjust atmosphere based on sun position for more dramatic sunsets.
 	var sunset_factor: float = clampf(1.0 - abs(sun_height) * 2.0, 0.0, 1.0) * clampf(sun_height + 0.3, 0.0, 1.0)
-	var horizon_day := Color(0.7, 0.8, 0.95)
-	var horizon_sunset := Color(1.0, 0.4, 0.1)
-	var horizon_night := Color(0.02, 0.02, 0.05)
-	sky_material.sky_horizon_color = horizon_night.lerp(horizon_day, day_factor).lerp(horizon_sunset, sunset_factor)
+	sky_material.set_shader_parameter("mie_strength", 0.005 + sunset_factor * 0.02)
+	
+	# Day factor for fog.
+	var day_factor: float = clampf((sun_height + 1.0) / 2.0, 0.0, 1.0)
 
-	# Ground colors.
-	sky_material.ground_horizon_color = Color(0.02, 0.02, 0.02).lerp(Color(0.4, 0.35, 0.3), day_factor)
-	sky_material.ground_bottom_color = Color(0.01, 0.01, 0.01).lerp(Color(0.15, 0.12, 0.1), day_factor)
-
-	# Update fog color to match sky horizon (prevents visible line at horizon).
+	# Update fog color to match sky.
 	var fog_night := Color(0.02, 0.02, 0.05)
 	var fog_day := Color(0.7, 0.75, 0.85)
 	var fog_sunset := Color(0.8, 0.5, 0.3)
 	var fog_color: Color = fog_night.lerp(fog_day, day_factor).lerp(fog_sunset, sunset_factor)
 	env.fog_light_color = fog_color
-	env.fog_light_energy = lerp(0.1, 1.0, day_factor)
+	env.fog_light_energy = lerpf(0.1, 1.0, day_factor)
 
 
 func _update_debug_ui() -> void:
@@ -235,30 +254,115 @@ func _update_debug_ui() -> void:
 
 
 func _update_clouds() -> void:
-	if cloud_mesh == null or player == null or cloud_material == null:
+	if cloud_container == null or player == null or cloud_material == null:
 		return
 	
-	# Follow player horizontally.
-	cloud_mesh.position.x = player.global_position.x
-	cloud_mesh.position.z = player.global_position.z
+	# Check if we need to rebuild clouds (player moved far enough).
+	var player_pos := player.global_position
+	var current_center := Vector2i(int(player_pos.x / CLOUD_UPDATE_DISTANCE), int(player_pos.z / CLOUD_UPDATE_DISTANCE))
+	if current_center != last_cloud_center:
+		last_cloud_center = current_center
+		_rebuild_clouds()
 	
 	# Tint clouds based on time of day.
 	var hour: float = fmod(time_of_day * 24.0 + 6.0, 24.0)
-	var cloud_tint := Color(1.0, 1.0, 1.0, 0.85)
+	var cloud_tint := Color(1.0, 1.0, 1.0, 0.9)
 	
 	if hour >= 6.0 and hour < 8.0:
 		# Sunrise - orange tint.
 		var t := (hour - 6.0) / 2.0
-		cloud_tint = Color(1.0, 0.85 + 0.15 * t, 0.7 + 0.3 * t, 0.85)
+		cloud_tint = Color(1.0, 0.85 + 0.15 * t, 0.7 + 0.3 * t, 0.9)
 	elif hour >= 18.0 and hour < 20.0:
 		# Sunset - orange/pink tint.
 		var t := (hour - 18.0) / 2.0
-		cloud_tint = Color(1.0, 0.85 - 0.1 * t, 0.7 - 0.1 * t, 0.85)
+		cloud_tint = Color(1.0, 0.85 - 0.1 * t, 0.7 - 0.1 * t, 0.9)
 	elif hour >= 20.0 or hour < 6.0:
 		# Night - darker, less visible.
-		cloud_tint = Color(0.3, 0.3, 0.4, 0.4)
+		cloud_tint = Color(0.4, 0.4, 0.5, 0.5)
 	
-	cloud_material.set_shader_parameter("cloud_color", cloud_tint)
+	cloud_material.albedo_color = cloud_tint
+
+
+func _rebuild_clouds() -> void:
+	if player == null or cloud_noise == null:
+		return
+	
+	var player_pos := player.global_position
+	var center_x := snappedf(player_pos.x, CLOUD_VOXEL_SIZE)
+	var center_z := snappedf(player_pos.z, CLOUD_VOXEL_SIZE)
+	
+	# Build cloud mesh using SurfaceTool.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	
+	# Generate cloud voxels in a radius around player.
+	for cx in range(-CLOUD_RADIUS, CLOUD_RADIUS + 1):
+		for cz in range(-CLOUD_RADIUS, CLOUD_RADIUS + 1):
+			# Skip corners for more circular shape.
+			if cx * cx + cz * cz > CLOUD_RADIUS * CLOUD_RADIUS:
+				continue
+			
+			var world_x := center_x + cx * CLOUD_VOXEL_SIZE
+			var world_z := center_z + cz * CLOUD_VOXEL_SIZE
+			
+			# Sample noise to determine if cloud exists here.
+			var noise_val := cloud_noise.get_noise_2d(world_x, world_z)
+			
+			# Only create cloud voxel if noise is above threshold.
+			if noise_val > 0.1:
+				# Vary height based on noise for puffy look.
+				var height_variation := (noise_val - 0.1) * 3.0
+				var num_layers := int(1 + height_variation * 2)
+				
+				for layer in num_layers:
+					var y_offset := layer * CLOUD_VOXEL_SIZE * 0.7
+					_add_cloud_voxel(st, world_x, CLOUD_HEIGHT + y_offset, world_z, CLOUD_VOXEL_SIZE)
+	
+	st.generate_normals()
+	var mesh := st.commit()
+	cloud_mesh_instance.mesh = mesh
+
+
+func _add_cloud_voxel(st: SurfaceTool, x: float, y: float, z: float, size: float) -> void:
+	# Add a cube at the given position.
+	var half := size * 0.5
+	
+	# Define the 8 corners.
+	var corners := [
+		Vector3(x - half, y - half, z - half),  # 0: bottom-left-back
+		Vector3(x + half, y - half, z - half),  # 1: bottom-right-back
+		Vector3(x + half, y - half, z + half),  # 2: bottom-right-front
+		Vector3(x - half, y - half, z + half),  # 3: bottom-left-front
+		Vector3(x - half, y + half, z - half),  # 4: top-left-back
+		Vector3(x + half, y + half, z - half),  # 5: top-right-back
+		Vector3(x + half, y + half, z + half),  # 6: top-right-front
+		Vector3(x - half, y + half, z + half),  # 7: top-left-front
+	]
+	
+	# Top face (+Y).
+	_add_quad(st, corners[4], corners[5], corners[6], corners[7], Vector3(0, 1, 0))
+	# Bottom face (-Y).
+	_add_quad(st, corners[3], corners[2], corners[1], corners[0], Vector3(0, -1, 0))
+	# Front face (+Z).
+	_add_quad(st, corners[3], corners[7], corners[6], corners[2], Vector3(0, 0, 1))
+	# Back face (-Z).
+	_add_quad(st, corners[1], corners[5], corners[4], corners[0], Vector3(0, 0, -1))
+	# Right face (+X).
+	_add_quad(st, corners[2], corners[6], corners[5], corners[1], Vector3(1, 0, 0))
+	# Left face (-X).
+	_add_quad(st, corners[0], corners[4], corners[7], corners[3], Vector3(-1, 0, 0))
+
+
+func _add_quad(st: SurfaceTool, v0: Vector3, v1: Vector3, v2: Vector3, v3: Vector3, normal: Vector3) -> void:
+	st.set_normal(normal)
+	st.add_vertex(v0)
+	st.add_vertex(v1)
+	st.add_vertex(v2)
+	
+	st.set_normal(normal)
+	st.add_vertex(v0)
+	st.add_vertex(v2)
+	st.add_vertex(v3)
 
 
 func _unhandled_input(event: InputEvent) -> void:
