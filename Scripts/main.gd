@@ -2,12 +2,14 @@ extends Node3D
 
 const PLAYER_SCENE := preload("res://Scenes/player.tscn")
 const VOXEL_WORLD_SCENE := preload("res://World/VoxelWorld.tscn")
+const INVENTORY_UI_SCENE := preload("res://Scenes/inventory_ui.tscn")
 const BlockTypes = preload("res://Data/BlockTypes.gd")
 
 var player: CharacterBody3D
 var voxel_world: Node3D
 var camera: Camera3D
 var hotbar: Control
+var inventory_ui: Control
 
 # Debug UI elements.
 var debug_label: Label
@@ -90,6 +92,16 @@ func _ready() -> void:
 	hotbar = $Hotbar
 	if hotbar:
 		hotbar.slot_selected.connect(_on_hotbar_slot_selected)
+		hotbar.item_dropped_to_hotbar.connect(_on_item_dropped_to_hotbar)
+		# Sync player inventory reference with hotbar.
+		hotbar.inventory = player.inventory
+	
+	# Create inventory UI.
+	inventory_ui = INVENTORY_UI_SCENE.instantiate()
+	add_child(inventory_ui)
+	inventory_ui.set_player(player)
+	inventory_ui.inventory_opened.connect(_on_inventory_opened)
+	inventory_ui.inventory_closed.connect(_on_inventory_closed)
 	
 	# Create cloud layer.
 	_create_clouds()
@@ -97,6 +109,27 @@ func _ready() -> void:
 
 func _on_hotbar_slot_selected(_slot_index: int, block_id: int) -> void:
 	selected_block = block_id
+
+
+func _on_inventory_opened() -> void:
+	# Pause game interactions while inventory is open.
+	pass
+
+
+func _on_inventory_closed() -> void:
+	# Resume game interactions.
+	# Refresh hotbar display to show current inventory counts.
+	if hotbar:
+		for i in range(hotbar.SLOT_COUNT):
+			hotbar._update_slot_display(i)
+
+
+func _on_item_dropped_to_hotbar(block_id: int, slot_index: int) -> void:
+	# Item was dragged from inventory to hotbar slot.
+	# The hotbar slot is now set to this block type.
+	# Update the hotbar display.
+	if hotbar:
+		hotbar._update_slot_display(slot_index)
 
 
 func _create_clouds() -> void:
@@ -253,13 +286,23 @@ func _update_debug_ui() -> void:
 	var minutes: int = int(fmod(time_of_day * 24.0 * 60.0, 60.0))
 	var time_str: String = "%02d:%02d" % [hours, minutes]
 
+	# Build inventory string.
+	var inv_str := ""
+	if player.inventory.size() > 0:
+		inv_str = "\nInventory: "
+		for block_id in player.inventory.keys():
+			var count: int = player.inventory[block_id]
+			var name: String = BlockTypes.get_block_name(block_id)
+			inv_str += "%s x%d  " % [name, count]
+	
 	debug_label.text = (
 		"Seed: %d\n" % voxel_world.get_world_seed() +
 		"Time: %s\n" % time_str +
 		"Player: (%.1f, %.1f, %.1f)\n" % [pos.x, pos.y, pos.z] +
 		"Chunk: (%d, %d)\n" % [chunk_x, chunk_z] +
 		"Chunks loaded: %d\n" % voxel_world.get_chunk_count() +
-		"[R] Regenerate world"
+		"[R] Regenerate world" +
+		inv_str
 	)
 
 

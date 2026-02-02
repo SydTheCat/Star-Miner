@@ -1,19 +1,27 @@
 extends Control
 
 const BlockTypes = preload("res://Data/BlockTypes.gd")
+const HotbarSlotScript = preload("res://UI/HotbarSlot.gd")
 
 const SLOT_COUNT := 10
 
 var selected_slot: int = 0
 var slots: Array[int] = []  # Block type in each slot
 var inventory: Dictionary = {}  # block_id -> count
+var slot_nodes: Array[Panel] = []
 
 @onready var slot_container: HBoxContainer = $SlotContainer
 
 signal slot_selected(slot_index: int, block_id: int)
+signal item_dropped_to_hotbar(block_id: int, slot_index: int)
 
 
 func _ready() -> void:
+	# Ensure we can receive drop events.
+	mouse_filter = Control.MOUSE_FILTER_STOP
+	if slot_container:
+		slot_container.mouse_filter = Control.MOUSE_FILTER_PASS
+	
 	# Initialize slots as empty.
 	slots.resize(SLOT_COUNT)
 	for i in SLOT_COUNT:
@@ -24,11 +32,14 @@ func _ready() -> void:
 
 
 func _create_slot_ui() -> void:
+	slot_nodes.clear()
 	# Create slot panels.
 	for i in SLOT_COUNT:
 		var slot := Panel.new()
 		slot.name = "Slot%d" % i
 		slot.custom_minimum_size = Vector2(50, 50)
+		slot.set_meta("slot_index", i)
+		slot.mouse_filter = Control.MOUSE_FILTER_STOP
 		
 		# Style the slot.
 		var style := StyleBoxFlat.new()
@@ -51,6 +62,7 @@ func _create_slot_ui() -> void:
 		hotkey_label.add_theme_font_size_override("font_size", 10)
 		hotkey_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
 		hotkey_label.position = Vector2(3, 1)
+		hotkey_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		slot.add_child(hotkey_label)
 		
 		# Add block indicator.
@@ -59,6 +71,7 @@ func _create_slot_ui() -> void:
 		block_indicator.position = Vector2(10, 10)
 		block_indicator.size = Vector2(30, 30)
 		block_indicator.color = _get_block_color(slots[i])
+		block_indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		slot.add_child(block_indicator)
 		
 		# Add count label (bottom-right corner).
@@ -70,9 +83,72 @@ func _create_slot_ui() -> void:
 		count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		count_label.position = Vector2(25, 35)
 		count_label.size = Vector2(22, 14)
+		count_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		slot.add_child(count_label)
 		
 		slot_container.add_child(slot)
+		slot_nodes.append(slot)
+
+
+func _can_drop_data(at_position: Vector2, data: Variant) -> bool:
+	print("Hotbar _can_drop_data called with: ", data)
+	if data is Dictionary and data.get("type") == "inventory_item":
+		# Check if over a slot.
+		for i in slot_nodes.size():
+			var slot: Panel = slot_nodes[i]
+			var slot_rect := Rect2(slot.global_position, slot.size)
+			if slot_rect.has_point(get_global_mouse_position()):
+				print("  -> Can drop on slot ", i)
+				return true
+	return false
+
+
+func _drop_data(at_position: Vector2, data: Variant) -> void:
+	print("Hotbar _drop_data called with: ", data)
+	if not (data is Dictionary and data.get("type") == "inventory_item"):
+		return
+	
+	# Find which slot we're dropping on.
+	for i in slot_nodes.size():
+		var slot: Panel = slot_nodes[i]
+		var slot_rect := Rect2(slot.global_position, slot.size)
+		if slot_rect.has_point(get_global_mouse_position()):
+			print("  -> Dropping on slot ", i)
+			drop_data_on_slot(i, data)
+			return
+
+
+func can_drop_data_on_slot(slot_index: int, data: Variant) -> bool:
+	if data is Dictionary and data.get("type") == "inventory_item":
+		return true
+	return false
+
+
+func drop_data_on_slot(slot_index: int, data: Variant) -> void:
+	if not (data is Dictionary and data.get("type") == "inventory_item"):
+		return
+	
+	var block_id: int = data.get("block_id", BlockTypes.BLOCK_AIR)
+	var source: String = data.get("source", "")
+	var source_slot_index: int = data.get("source_slot_index", -1)
+	
+	if block_id == BlockTypes.BLOCK_AIR:
+		return
+	
+	# If dragging from inventory UI, add to this slot.
+	if source == "inventory":
+		# Set this slot to the dragged block.
+		slots[slot_index] = block_id
+		_update_slot_display(slot_index)
+		item_dropped_to_hotbar.emit(block_id, slot_index)
+	
+	# If dragging from another hotbar slot, swap.
+	elif source == "hotbar" and source_slot_index >= 0 and source_slot_index != slot_index:
+		var temp_block: int = slots[slot_index]
+		slots[slot_index] = slots[source_slot_index]
+		slots[source_slot_index] = temp_block
+		_update_slot_display(slot_index)
+		_update_slot_display(source_slot_index)
 
 
 func _input(event: InputEvent) -> void:

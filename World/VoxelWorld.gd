@@ -5,6 +5,7 @@ extends Node3D
 # Uses threaded generation to prevent freezing.
 
 const CHUNK_SCENE := preload("res://World/chunk.tscn")
+const FALLING_BLOCK_SCENE := preload("res://Scenes/falling_block.tscn")
 const BlockTypes = preload("res://Data/BlockTypes.gd")
 
 # Chunk size constants (must match Chunk.gd).
@@ -172,6 +173,10 @@ func _generate_terrain_data(chunk_coords: Vector3i, thread_noise: FastNoiseLite)
 	var base_x: int = chunk_coords.x * CHUNK_SIZE_X
 	var base_z: int = chunk_coords.z * CHUNK_SIZE_Z
 	
+	# First pass: generate basic terrain.
+	var heights := PackedInt32Array()
+	heights.resize(CHUNK_SIZE_X * CHUNK_SIZE_Z)
+	
 	for lx in CHUNK_SIZE_X:
 		for lz in CHUNK_SIZE_Z:
 			var world_x: int = base_x + lx
@@ -181,6 +186,7 @@ func _generate_terrain_data(chunk_coords: Vector3i, thread_noise: FastNoiseLite)
 			var noise_val: float = thread_noise.get_noise_2d(float(world_x), float(world_z))
 			var height: int = int(20.0 + noise_val * 5.0)
 			height = clampi(height, 1, CHUNK_SIZE_Y - 1)
+			heights[lx + lz * CHUNK_SIZE_X] = height
 			
 			for ly in CHUNK_SIZE_Y:
 				var block_id: int = BlockTypes.BLOCK_AIR
@@ -198,7 +204,67 @@ func _generate_terrain_data(chunk_coords: Vector3i, thread_noise: FastNoiseLite)
 				var index := lx + lz * CHUNK_SIZE_X + ly * CHUNK_SIZE_X * CHUNK_SIZE_Z
 				blocks[index] = block_id
 	
+	# Second pass: place trees.
+	for lx in range(2, CHUNK_SIZE_X - 2):
+		for lz in range(2, CHUNK_SIZE_Z - 2):
+			var world_x: int = base_x + lx
+			var world_z: int = base_z + lz
+			
+			# Use hash to determine if tree spawns here.
+			if _should_place_tree(world_x, world_z):
+				var height: int = heights[lx + lz * CHUNK_SIZE_X]
+				_place_tree(blocks, lx, height, lz)
+	
 	return blocks
+
+
+func _should_place_tree(world_x: int, world_z: int) -> bool:
+	# Deterministic hash to decide tree placement.
+	var hash_val := _hash_coords(world_x, world_z)
+	return hash_val % 47 == 0  # Roughly 1 in 47 chance per valid position.
+
+
+func _hash_coords(x: int, z: int) -> int:
+	# Simple hash for deterministic placement.
+	var h := x * 374761393 + z * 668265263
+	h = (h ^ (h >> 13)) * 1274126177
+	return absi(h)
+
+
+func _place_tree(blocks: PackedInt32Array, lx: int, ground_y: int, lz: int) -> void:
+	# Place a simple tree: trunk + leaves.
+	var trunk_height := 4 + (_hash_coords(lx, lz) % 3)  # 4-6 blocks tall.
+	
+	# Place trunk.
+	for ty in trunk_height:
+		var y := ground_y + ty
+		if y < CHUNK_SIZE_Y:
+			var index := lx + lz * CHUNK_SIZE_X + y * CHUNK_SIZE_X * CHUNK_SIZE_Z
+			blocks[index] = BlockTypes.BLOCK_WOOD
+	
+	# Place leaves (sphere-ish shape at top).
+	var leaf_y := ground_y + trunk_height - 1
+	for dy in range(-1, 3):
+		for dx in range(-2, 3):
+			for dz in range(-2, 3):
+				var nx := lx + dx
+				var ny := leaf_y + dy
+				var nz := lz + dz
+				
+				# Skip if out of chunk bounds.
+				if nx < 0 or nx >= CHUNK_SIZE_X or nz < 0 or nz >= CHUNK_SIZE_Z or ny >= CHUNK_SIZE_Y:
+					continue
+				
+				# Skip corners for rounder shape.
+				if absi(dx) == 2 and absi(dz) == 2:
+					continue
+				if dy == 2 and (absi(dx) > 1 or absi(dz) > 1):
+					continue
+				
+				var index := nx + nz * CHUNK_SIZE_X + ny * CHUNK_SIZE_X * CHUNK_SIZE_Z
+				# Only place leaves in air.
+				if blocks[index] == BlockTypes.BLOCK_AIR:
+					blocks[index] = BlockTypes.BLOCK_LEAVES
 
 
 func _generate_mesh_data_threaded(blocks: PackedInt32Array) -> Dictionary:
@@ -515,8 +581,17 @@ func set_block_global(world_x: int, world_y: int, world_z: int, block_id: int) -
 	var local_x := world_x - chunk_x * CHUNK_SIZE_X
 	var local_z := world_z - chunk_z * CHUNK_SIZE_Z
 
+	# Check if we're breaking a tree block (wood/leaves).
+	var old_block: int = chunk.get_block(local_x, world_y, local_z)
+	var breaking_tree_block := (block_id == BlockTypes.BLOCK_AIR and 
+		(old_block == BlockTypes.BLOCK_WOOD or old_block == BlockTypes.BLOCK_LEAVES))
+
 	# Set the block.
 	chunk.set_block(local_x, world_y, local_z, block_id)
+
+	# If we broke a tree block, check for unsupported blocks above.
+	if breaking_tree_block:
+		_check_falling_blocks(world_x, world_y, world_z)
 
 	# Rebuild this chunk's mesh.
 	chunk.update_mesh()
@@ -536,3 +611,105 @@ func _update_chunk_mesh_at(coords: Vector3i) -> void:
 	if chunks.has(coords):
 		var chunk: Node3D = chunks[coords]
 		chunk.update_mesh()
+
+
+func _check_falling_blocks(broken_x: int, broken_y: int, broken_z: int) -> void:
+	# Find all connected tree blocks (wood/leaves) that lost support.
+	# Use flood fill to find connected tree blocks, then check if any are grounded.
+	var to_check: Array[Vector3i] = []
+	var checked: Dictionary = {}
+	var tree_blocks: Array[Vector3i] = []
+	
+	# Start checking neighbors of the broken block.
+	var neighbors := [
+		Vector3i(broken_x, broken_y + 1, broken_z),  # Above.
+		Vector3i(broken_x + 1, broken_y, broken_z),
+		Vector3i(broken_x - 1, broken_y, broken_z),
+		Vector3i(broken_x, broken_y, broken_z + 1),
+		Vector3i(broken_x, broken_y, broken_z - 1),
+	]
+	
+	for n in neighbors:
+		var block := get_block_global(n.x, n.y, n.z)
+		if block == BlockTypes.BLOCK_WOOD or block == BlockTypes.BLOCK_LEAVES:
+			to_check.append(n)
+	
+	# Flood fill to find all connected tree blocks.
+	while not to_check.is_empty():
+		var pos: Vector3i = to_check.pop_back()
+		var key := "%d,%d,%d" % [pos.x, pos.y, pos.z]
+		
+		if checked.has(key):
+			continue
+		checked[key] = true
+		
+		var block := get_block_global(pos.x, pos.y, pos.z)
+		if block != BlockTypes.BLOCK_WOOD and block != BlockTypes.BLOCK_LEAVES:
+			continue
+		
+		tree_blocks.append(pos)
+		
+		# Add neighbors to check.
+		var next_neighbors := [
+			Vector3i(pos.x, pos.y + 1, pos.z),
+			Vector3i(pos.x, pos.y - 1, pos.z),
+			Vector3i(pos.x + 1, pos.y, pos.z),
+			Vector3i(pos.x - 1, pos.y, pos.z),
+			Vector3i(pos.x, pos.y, pos.z + 1),
+			Vector3i(pos.x, pos.y, pos.z - 1),
+		]
+		for nn in next_neighbors:
+			var nn_key := "%d,%d,%d" % [nn.x, nn.y, nn.z]
+			if not checked.has(nn_key):
+				to_check.append(nn)
+	
+	# Check if any tree block is supported by non-tree solid block.
+	var is_supported := false
+	for pos in tree_blocks:
+		var below := get_block_global(pos.x, pos.y - 1, pos.z)
+		if below != BlockTypes.BLOCK_AIR and below != BlockTypes.BLOCK_WOOD and below != BlockTypes.BLOCK_LEAVES and below != BlockTypes.BLOCK_WATER:
+			is_supported = true
+			break
+	
+	# If not supported, make all tree blocks fall.
+	if not is_supported:
+		var affected_chunks: Dictionary = {}
+		for pos in tree_blocks:
+			var block := get_block_global(pos.x, pos.y, pos.z)
+			_spawn_falling_block(pos, block)
+			# Remove block from world (without recursively checking).
+			_set_block_no_physics(pos.x, pos.y, pos.z, BlockTypes.BLOCK_AIR)
+			# Track affected chunk.
+			var cx := floori(float(pos.x) / float(CHUNK_SIZE_X))
+			var cz := floori(float(pos.z) / float(CHUNK_SIZE_Z))
+			affected_chunks[Vector3i(cx, 0, cz)] = true
+		
+		# Rebuild affected chunk meshes.
+		for coords in affected_chunks.keys():
+			_update_chunk_mesh_at(coords)
+
+
+func _spawn_falling_block(pos: Vector3i, block_type: int) -> void:
+	var falling := FALLING_BLOCK_SCENE.instantiate()
+	falling.block_type = block_type
+	falling.global_position = Vector3(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5)
+	get_tree().current_scene.add_child(falling)
+
+
+func _set_block_no_physics(world_x: int, world_y: int, world_z: int, block_id: int) -> void:
+	# Set block without triggering falling block check.
+	if world_y < 0 or world_y >= CHUNK_SIZE_Y:
+		return
+
+	var chunk_x := floori(float(world_x) / float(CHUNK_SIZE_X))
+	var chunk_z := floori(float(world_z) / float(CHUNK_SIZE_Z))
+	var coords := Vector3i(chunk_x, 0, chunk_z)
+
+	if not chunks.has(coords):
+		return
+
+	var chunk: Node3D = chunks[coords]
+	var local_x := world_x - chunk_x * CHUNK_SIZE_X
+	var local_z := world_z - chunk_z * CHUNK_SIZE_Z
+
+	chunk.set_block(local_x, world_y, local_z, block_id)

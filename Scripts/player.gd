@@ -6,14 +6,17 @@ extends CharacterBody3D
 
 const MOVE_SPEED := 6.0
 const SPRINT_MULTIPLIER := 1.7
-const JUMP_VELOCITY := 5.5
+const JUMP_VELOCITY := 7.0
 
 # Use a normal var here because ProjectSettings.get_setting() is not a constant expression.
-var GRAVITY: float = ProjectSettings.get_setting("physics/3d/default_gravity")
+var GRAVITY: float = ProjectSettings.get_setting("physics/3d/default_gravity") * 2.0
 
 var mouse_sensitivity: float = 0.0025
 var yaw: float = 0.0
 var pitch: float = 0.0
+
+# Inventory: Dictionary of block_type -> count.
+var inventory: Dictionary = {}
 
 @onready var head: Node3D = $Head
 @onready var camera: Camera3D = $Head/Camera3D
@@ -36,18 +39,20 @@ func _physics_process(delta: float) -> void:
 	if Input.is_action_pressed("sprint"):
 		speed *= SPRINT_MULTIPLIER
 
-	if direction != Vector3.ZERO:
-		velocity.x = direction.x * speed
-		velocity.z = direction.z * speed
-	else:
-		velocity.x = move_toward(velocity.x, 0.0, speed)
-		velocity.z = move_toward(velocity.z, 0.0, speed)
-
-	if not is_on_floor():
-		velocity.y -= GRAVITY * delta
-	else:
+	# Only allow movement changes when on the floor (no air control).
+	if is_on_floor():
+		if direction != Vector3.ZERO:
+			velocity.x = direction.x * speed
+			velocity.z = direction.z * speed
+		else:
+			velocity.x = move_toward(velocity.x, 0.0, speed)
+			velocity.z = move_toward(velocity.z, 0.0, speed)
+		
 		if Input.is_action_just_pressed("jump"):
 			velocity.y = JUMP_VELOCITY
+	else:
+		# In the air - apply gravity, no direction changes.
+		velocity.y -= GRAVITY * delta
 
 	move_and_slide()
 
@@ -66,3 +71,14 @@ func _unhandled_input(event: InputEvent) -> void:
 			Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
 		else:
 			Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+
+
+func add_to_inventory(block_type: int, count: int = 1) -> void:
+	if inventory.has(block_type):
+		inventory[block_type] += count
+	else:
+		inventory[block_type] = count
+
+
+func get_inventory_count(block_type: int) -> int:
+	return inventory.get(block_type, 0)

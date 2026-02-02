@@ -8,6 +8,8 @@ const BLOCK_GRASS := 1
 const BLOCK_DIRT  := 2
 const BLOCK_STONE := 3
 const BLOCK_WATER := 4
+const BLOCK_WOOD  := 5
+const BLOCK_LEAVES := 6
 
 # Optional helper to list all solid (collidable) blocks.
 static func is_solid(block_id: int) -> bool:
@@ -26,5 +28,9 @@ static func get_block_name(block_id: int) -> String:
 			return "Stone"
 		BLOCK_WATER:
 			return "Water"
+		BLOCK_WOOD:
+			return "Wood"
+		BLOCK_LEAVES:
+			return "Leaves"
 		_:
 			return "Unknown(%d)" % block_id

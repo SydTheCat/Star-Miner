@@ -99,6 +99,41 @@ func _build_atlas() -> void:
 	uv_rects[str(BlockTypes.BLOCK_WATER) + ":bottom"] = water_uv
 	uv_rects[str(BlockTypes.BLOCK_WATER) + ":side"] = water_uv
 	
+	# Wood uses a brown color (slot 5).
+	var wood_x := (5 % ATLAS_COLUMNS) * TEXTURE_SIZE
+	var wood_y := (5 / ATLAS_COLUMNS) * TEXTURE_SIZE
+	for y in TEXTURE_SIZE:
+		for x in TEXTURE_SIZE:
+			atlas_image.set_pixel(wood_x + x, wood_y + y, Color(0.4, 0.26, 0.13, 1.0))
+	var wood_uv := Rect2(Vector2(float(5 % ATLAS_COLUMNS) / ATLAS_COLUMNS, float(5 / ATLAS_COLUMNS) / ATLAS_ROWS), Vector2(1.0 / ATLAS_COLUMNS, 1.0 / ATLAS_ROWS))
+	uv_rects[str(BlockTypes.BLOCK_WOOD) + ":top"] = wood_uv
+	uv_rects[str(BlockTypes.BLOCK_WOOD) + ":bottom"] = wood_uv
+	uv_rects[str(BlockTypes.BLOCK_WOOD) + ":side"] = wood_uv
+	
+	# Leaves uses leaves.png texture tinted green (slot 6).
+	var leaves_tex := load("res://Textures/leaves.png") as Texture2D
+	var leaves_x := (6 % ATLAS_COLUMNS) * TEXTURE_SIZE
+	var leaves_y := (6 / ATLAS_COLUMNS) * TEXTURE_SIZE
+	if leaves_tex:
+		var leaves_img := leaves_tex.get_image()
+		leaves_img.resize(TEXTURE_SIZE, TEXTURE_SIZE)
+		# Tint the texture green.
+		var green_tint := Color(0.3, 0.7, 0.2, 1.0)
+		for y in TEXTURE_SIZE:
+			for x in TEXTURE_SIZE:
+				var pixel := leaves_img.get_pixel(x, y)
+				var tinted := Color(pixel.r * green_tint.r, pixel.g * green_tint.g, pixel.b * green_tint.b, pixel.a)
+				atlas_image.set_pixel(leaves_x + x, leaves_y + y, tinted)
+	else:
+		# Fallback to green color.
+		for y in TEXTURE_SIZE:
+			for x in TEXTURE_SIZE:
+				atlas_image.set_pixel(leaves_x + x, leaves_y + y, Color(0.2, 0.5, 0.15, 1.0))
+	var leaves_uv := Rect2(Vector2(float(6 % ATLAS_COLUMNS) / ATLAS_COLUMNS, float(6 / ATLAS_COLUMNS) / ATLAS_ROWS), Vector2(1.0 / ATLAS_COLUMNS, 1.0 / ATLAS_ROWS))
+	uv_rects[str(BlockTypes.BLOCK_LEAVES) + ":top"] = leaves_uv
+	uv_rects[str(BlockTypes.BLOCK_LEAVES) + ":bottom"] = leaves_uv
+	uv_rects[str(BlockTypes.BLOCK_LEAVES) + ":side"] = leaves_uv
+	
 	# Create texture from atlas.
 	atlas_texture = ImageTexture.create_from_image(atlas_image)
 	print("BlockTextures: Atlas created with ", uv_rects.size(), " UV entries")
