@@ -128,6 +128,12 @@ func update_mesh() -> void:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	
+	# Get texture manager.
+	var tex_manager = get_node_or_null("/root/BlockTextures")
+	if tex_manager == null:
+		push_error("BlockTextures autoload not found!")
+		return
+	
 	# Pre-cache block data for faster access.
 	var local_blocks := blocks
 	var size_x := CHUNK_SIZE_X
@@ -145,61 +151,60 @@ func update_mesh() -> void:
 				if block_id == BlockTypes.BLOCK_AIR:
 					continue
 
-				var color := _block_color(block_id)
-
 				# Neighbor checks – add face only if neighbor is air.
 				# Inline neighbor checks for interior blocks (faster).
 				
-				# -X (west)
+				# -X (west) - side
 				if x > 0:
 					if local_blocks[index - 1] == BlockTypes.BLOCK_AIR:
-						_add_face_x(st, x, y, z, false, color)
+						_add_face_x_uv(st, x, y, z, false, tex_manager.get_uv_rect(block_id, "side"))
 				elif get_neighbor_block(x - 1, y, z) == BlockTypes.BLOCK_AIR:
-					_add_face_x(st, x, y, z, false, color)
+					_add_face_x_uv(st, x, y, z, false, tex_manager.get_uv_rect(block_id, "side"))
 				
-				# +X (east)
+				# +X (east) - side
 				if x < size_x - 1:
 					if local_blocks[index + 1] == BlockTypes.BLOCK_AIR:
-						_add_face_x(st, x, y, z, true, color)
+						_add_face_x_uv(st, x, y, z, true, tex_manager.get_uv_rect(block_id, "side"))
 				elif get_neighbor_block(x + 1, y, z) == BlockTypes.BLOCK_AIR:
-					_add_face_x(st, x, y, z, true, color)
+					_add_face_x_uv(st, x, y, z, true, tex_manager.get_uv_rect(block_id, "side"))
 
-				# -Y (down)
+				# -Y (down) - bottom
 				if y > 0:
 					if local_blocks[index - size_xz] == BlockTypes.BLOCK_AIR:
-						_add_face_y(st, x, y, z, false, color)
+						_add_face_y_uv(st, x, y, z, false, tex_manager.get_uv_rect(block_id, "bottom"))
 				elif get_neighbor_block(x, y - 1, z) == BlockTypes.BLOCK_AIR:
-					_add_face_y(st, x, y, z, false, color)
+					_add_face_y_uv(st, x, y, z, false, tex_manager.get_uv_rect(block_id, "bottom"))
 				
-				# +Y (up)
+				# +Y (up) - top
 				if y < size_y - 1:
 					if local_blocks[index + size_xz] == BlockTypes.BLOCK_AIR:
-						_add_face_y(st, x, y, z, true, color)
+						_add_face_y_uv(st, x, y, z, true, tex_manager.get_uv_rect(block_id, "top"))
 				elif get_neighbor_block(x, y + 1, z) == BlockTypes.BLOCK_AIR:
-					_add_face_y(st, x, y, z, true, color)
+					_add_face_y_uv(st, x, y, z, true, tex_manager.get_uv_rect(block_id, "top"))
 
-				# -Z (north)
+				# -Z (north) - side
 				if z > 0:
 					if local_blocks[index - size_x] == BlockTypes.BLOCK_AIR:
-						_add_face_z(st, x, y, z, false, color)
+						_add_face_z_uv(st, x, y, z, false, tex_manager.get_uv_rect(block_id, "side"))
 				elif get_neighbor_block(x, y, z - 1) == BlockTypes.BLOCK_AIR:
-					_add_face_z(st, x, y, z, false, color)
+					_add_face_z_uv(st, x, y, z, false, tex_manager.get_uv_rect(block_id, "side"))
 				
-				# +Z (south)
+				# +Z (south) - side
 				if z < size_z - 1:
 					if local_blocks[index + size_x] == BlockTypes.BLOCK_AIR:
-						_add_face_z(st, x, y, z, true, color)
+						_add_face_z_uv(st, x, y, z, true, tex_manager.get_uv_rect(block_id, "side"))
 				elif get_neighbor_block(x, y, z + 1) == BlockTypes.BLOCK_AIR:
-					_add_face_z(st, x, y, z, true, color)
+					_add_face_z_uv(st, x, y, z, true, tex_manager.get_uv_rect(block_id, "side"))
 
 	# Index the mesh and generate proper normals.
 	st.index()
 	var mesh: ArrayMesh = st.commit()
 
-	# Create a material that uses vertex colors.
+	# Create material with texture atlas.
 	var material := StandardMaterial3D.new()
-	material.vertex_color_use_as_albedo = true
-	material.cull_mode = BaseMaterial3D.CULL_DISABLED  # Disable culling to show both sides
+	material.albedo_texture = tex_manager.get_atlas()
+	material.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
 
 	mesh_instance.mesh = mesh
 	mesh_instance.material_override = material
@@ -227,26 +232,60 @@ func apply_mesh_data(mesh_data: Dictionary) -> void:
 	# This only does the GPU upload, all vertex computation was done on worker thread.
 	var vertices: PackedVector3Array = mesh_data["vertices"]
 	var normals: PackedVector3Array = mesh_data["normals"]
-	var colors: PackedColorArray = mesh_data["colors"]
+	var block_ids: PackedInt32Array = mesh_data["block_ids"]
+	var face_types: PackedByteArray = mesh_data["face_types"]
 	
 	if vertices.is_empty():
 		mesh_instance.mesh = null
 		collider_shape.shape = null
 		return
 	
+	# Get texture manager.
+	var tex_manager = get_node_or_null("/root/BlockTextures")
+	if tex_manager == null:
+		push_error("BlockTextures autoload not found!")
+		return
+	
+	# Generate UVs based on block IDs and face types.
+	var uvs := PackedVector2Array()
+	uvs.resize(vertices.size())
+	
+	var face_names := ["side", "top", "bottom"]
+	var i := 0
+	while i < block_ids.size():
+		var block_id: int = block_ids[i]
+		var face_type: int = face_types[i]
+		var face_name: String = face_names[face_type]
+		var uv_rect: Rect2 = tex_manager.get_uv_rect(block_id, face_name)
+		
+		# Each face has 6 vertices (2 triangles).
+		# UV corners - flipped vertically to correct orientation
+		var uv0 := uv_rect.position + Vector2(0, uv_rect.size.y)
+		var uv1 := uv_rect.position + uv_rect.size
+		var uv2 := uv_rect.position + Vector2(uv_rect.size.x, 0)
+		var uv3 := uv_rect.position
+		uvs[i] = uv0
+		uvs[i + 1] = uv1
+		uvs[i + 2] = uv2
+		uvs[i + 3] = uv0
+		uvs[i + 4] = uv2
+		uvs[i + 5] = uv3
+		i += 6
+	
 	# Build ArrayMesh directly from arrays (faster than SurfaceTool).
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = vertices
 	arrays[Mesh.ARRAY_NORMAL] = normals
-	arrays[Mesh.ARRAY_COLOR] = colors
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
 	
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	
-	# Create material that uses vertex colors.
+	# Create material with texture atlas.
 	var material := StandardMaterial3D.new()
-	material.vertex_color_use_as_albedo = true
+	material.albedo_texture = tex_manager.get_atlas()
+	material.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
 	material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	
 	mesh_instance.mesh = mesh
@@ -370,4 +409,106 @@ func _push_quad(
 
 	st.set_normal(normal)
 	st.set_color(color)
+	st.add_vertex(v3)
+
+
+# UV-based face functions for textured rendering.
+func _add_face_x_uv(st: SurfaceTool, x: int, y: int, z: int, positive: bool, uv_rect: Rect2) -> void:
+	var px := float(x)
+	var py := float(y)
+	var pz := float(z)
+
+	if positive:
+		var x0 := px + 1.0
+		var v0 := Vector3(x0, py, pz)
+		var v1 := Vector3(x0, py, pz + 1.0)
+		var v2 := Vector3(x0, py + 1.0, pz + 1.0)
+		var v3 := Vector3(x0, py + 1.0, pz)
+		var normal := Vector3(1, 0, 0)
+		_push_quad_uv(st, v0, v1, v2, v3, normal, uv_rect)
+	else:
+		var x0 := px
+		var v0 := Vector3(x0, py, pz + 1.0)
+		var v1 := Vector3(x0, py, pz)
+		var v2 := Vector3(x0, py + 1.0, pz)
+		var v3 := Vector3(x0, py + 1.0, pz + 1.0)
+		var normal := Vector3(-1, 0, 0)
+		_push_quad_uv(st, v0, v1, v2, v3, normal, uv_rect)
+
+
+func _add_face_y_uv(st: SurfaceTool, x: int, y: int, z: int, positive: bool, uv_rect: Rect2) -> void:
+	var px := float(x)
+	var py := float(y)
+	var pz := float(z)
+
+	if positive:
+		var y0 := py + 1.0
+		var v0 := Vector3(px, y0, pz)
+		var v1 := Vector3(px + 1.0, y0, pz)
+		var v2 := Vector3(px + 1.0, y0, pz + 1.0)
+		var v3 := Vector3(px, y0, pz + 1.0)
+		var normal := Vector3(0, 1, 0)
+		_push_quad_uv(st, v0, v1, v2, v3, normal, uv_rect)
+	else:
+		var y0 := py
+		var v0 := Vector3(px, y0, pz + 1.0)
+		var v1 := Vector3(px + 1.0, y0, pz + 1.0)
+		var v2 := Vector3(px + 1.0, y0, pz)
+		var v3 := Vector3(px, y0, pz)
+		var normal := Vector3(0, -1, 0)
+		_push_quad_uv(st, v0, v1, v2, v3, normal, uv_rect)
+
+
+func _add_face_z_uv(st: SurfaceTool, x: int, y: int, z: int, positive: bool, uv_rect: Rect2) -> void:
+	var px := float(x)
+	var py := float(y)
+	var pz := float(z)
+
+	if positive:
+		var z0 := pz + 1.0
+		var v0 := Vector3(px, py, z0)
+		var v1 := Vector3(px + 1.0, py, z0)
+		var v2 := Vector3(px + 1.0, py + 1.0, z0)
+		var v3 := Vector3(px, py + 1.0, z0)
+		var normal := Vector3(0, 0, 1)
+		_push_quad_uv(st, v0, v1, v2, v3, normal, uv_rect)
+	else:
+		var z0 := pz
+		var v0 := Vector3(px + 1.0, py, z0)
+		var v1 := Vector3(px, py, z0)
+		var v2 := Vector3(px, py + 1.0, z0)
+		var v3 := Vector3(px + 1.0, py + 1.0, z0)
+		var normal := Vector3(0, 0, -1)
+		_push_quad_uv(st, v0, v1, v2, v3, normal, uv_rect)
+
+
+func _push_quad_uv(st: SurfaceTool, v0: Vector3, v1: Vector3, v2: Vector3, v3: Vector3, normal: Vector3, uv_rect: Rect2) -> void:
+	# UV coordinates - flipped vertically to correct orientation
+	var uv0 := uv_rect.position + Vector2(0, uv_rect.size.y)
+	var uv1 := uv_rect.position + uv_rect.size
+	var uv2 := uv_rect.position + Vector2(uv_rect.size.x, 0)
+	var uv3 := uv_rect.position
+	
+	st.set_normal(normal)
+	st.set_uv(uv0)
+	st.add_vertex(v0)
+
+	st.set_normal(normal)
+	st.set_uv(uv1)
+	st.add_vertex(v1)
+
+	st.set_normal(normal)
+	st.set_uv(uv2)
+	st.add_vertex(v2)
+
+	st.set_normal(normal)
+	st.set_uv(uv0)
+	st.add_vertex(v0)
+
+	st.set_normal(normal)
+	st.set_uv(uv2)
+	st.add_vertex(v2)
+
+	st.set_normal(normal)
+	st.set_uv(uv3)
 	st.add_vertex(v3)

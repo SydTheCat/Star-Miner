@@ -7,6 +7,7 @@ const BlockTypes = preload("res://Data/BlockTypes.gd")
 var player: CharacterBody3D
 var voxel_world: Node3D
 var camera: Camera3D
+var hotbar: Control
 
 # Debug UI elements.
 var debug_label: Label
@@ -85,8 +86,17 @@ func _ready() -> void:
 	# Create debug UI.
 	_create_debug_ui()
 	
+	# Connect to hotbar.
+	hotbar = $Hotbar
+	if hotbar:
+		hotbar.slot_selected.connect(_on_hotbar_slot_selected)
+	
 	# Create cloud layer.
 	_create_clouds()
+
+
+func _on_hotbar_slot_selected(_slot_index: int, block_id: int) -> void:
+	selected_block = block_id
 
 
 func _create_clouds() -> void:
@@ -415,11 +425,26 @@ func _update_target_block() -> void:
 func _break_block() -> void:
 	if voxel_world == null:
 		return
+	
+	# Get the block type before breaking.
+	var block_id: int = voxel_world.get_block_global(target_block_pos.x, target_block_pos.y, target_block_pos.z)
+	
+	# Set block to air.
 	voxel_world.set_block_global(target_block_pos.x, target_block_pos.y, target_block_pos.z, BlockTypes.BLOCK_AIR)
+	
+	# Add to inventory.
+	if hotbar and block_id != BlockTypes.BLOCK_AIR:
+		hotbar.add_block(block_id)
 
 
 func _place_block() -> void:
 	if voxel_world == null:
+		return
+	
+	# Check if we have blocks to place.
+	if hotbar == null:
+		return
+	if not hotbar.can_place_block():
 		return
 	
 	var place_pos := target_block_pos + Vector3i(
@@ -436,4 +461,6 @@ func _place_block() -> void:
 	if dx < 0.8 and dz < 0.8 and dy < 1.8:
 		return
 	
+	# Remove from inventory and place the block.
+	hotbar.remove_block(selected_block)
 	voxel_world.set_block_global(place_pos.x, place_pos.y, place_pos.z, selected_block)

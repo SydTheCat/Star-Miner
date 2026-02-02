@@ -206,7 +206,9 @@ func _generate_mesh_data_threaded(blocks: PackedInt32Array) -> Dictionary:
 	# Returns arrays that can be used to build ArrayMesh on main thread.
 	var vertices := PackedVector3Array()
 	var normals := PackedVector3Array()
-	var colors := PackedColorArray()
+	var uvs := PackedVector2Array()
+	var block_ids := PackedInt32Array()  # Store block IDs for UV lookup on main thread
+	var face_types := PackedByteArray()  # 0=side, 1=top, 2=bottom
 	
 	var size_x := CHUNK_SIZE_X
 	var size_y := CHUNK_SIZE_Y
@@ -223,50 +225,41 @@ func _generate_mesh_data_threaded(blocks: PackedInt32Array) -> Dictionary:
 				if block_id == BlockTypes.BLOCK_AIR:
 					continue
 				
-				var color := _get_block_color(block_id)
-				
 				# Check neighbors and add faces.
-				# -X
+				# -X (side)
 				if x == 0 or blocks[index - 1] == BlockTypes.BLOCK_AIR:
-					_add_face_x_data(vertices, normals, colors, x, y, z, false, color)
-				# +X
+					_add_face_x_data(vertices, normals, x, y, z, false)
+					for i in 6: block_ids.append(block_id); face_types.append(0)
+				# +X (side)
 				if x == size_x - 1 or blocks[index + 1] == BlockTypes.BLOCK_AIR:
-					_add_face_x_data(vertices, normals, colors, x, y, z, true, color)
-				# -Y
+					_add_face_x_data(vertices, normals, x, y, z, true)
+					for i in 6: block_ids.append(block_id); face_types.append(0)
+				# -Y (bottom)
 				if y == 0 or blocks[index - size_xz] == BlockTypes.BLOCK_AIR:
-					_add_face_y_data(vertices, normals, colors, x, y, z, false, color)
-				# +Y
+					_add_face_y_data(vertices, normals, x, y, z, false)
+					for i in 6: block_ids.append(block_id); face_types.append(2)
+				# +Y (top)
 				if y == size_y - 1 or blocks[index + size_xz] == BlockTypes.BLOCK_AIR:
-					_add_face_y_data(vertices, normals, colors, x, y, z, true, color)
-				# -Z
+					_add_face_y_data(vertices, normals, x, y, z, true)
+					for i in 6: block_ids.append(block_id); face_types.append(1)
+				# -Z (side)
 				if z == 0 or blocks[index - size_x] == BlockTypes.BLOCK_AIR:
-					_add_face_z_data(vertices, normals, colors, x, y, z, false, color)
-				# +Z
+					_add_face_z_data(vertices, normals, x, y, z, false)
+					for i in 6: block_ids.append(block_id); face_types.append(0)
+				# +Z (side)
 				if z == size_z - 1 or blocks[index + size_x] == BlockTypes.BLOCK_AIR:
-					_add_face_z_data(vertices, normals, colors, x, y, z, true, color)
+					_add_face_z_data(vertices, normals, x, y, z, true)
+					for i in 6: block_ids.append(block_id); face_types.append(0)
 	
 	return {
 		"vertices": vertices,
 		"normals": normals,
-		"colors": colors,
+		"block_ids": block_ids,
+		"face_types": face_types,
 	}
 
 
-func _get_block_color(block_id: int) -> Color:
-	match block_id:
-		BlockTypes.BLOCK_GRASS:
-			return Color(0.2, 0.8, 0.2)
-		BlockTypes.BLOCK_DIRT:
-			return Color(0.5, 0.3, 0.1)
-		BlockTypes.BLOCK_STONE:
-			return Color(0.5, 0.5, 0.5)
-		BlockTypes.BLOCK_WATER:
-			return Color(0.2, 0.4, 0.9, 0.7)
-		_:
-			return Color(1, 1, 1)
-
-
-func _add_face_x_data(vertices: PackedVector3Array, normals: PackedVector3Array, colors: PackedColorArray, x: int, y: int, z: int, positive: bool, color: Color) -> void:
+func _add_face_x_data(vertices: PackedVector3Array, normals: PackedVector3Array, x: int, y: int, z: int, positive: bool) -> void:
 	var px := float(x)
 	var py := float(y)
 	var pz := float(z)
@@ -278,7 +271,7 @@ func _add_face_x_data(vertices: PackedVector3Array, normals: PackedVector3Array,
 		var v2 := Vector3(x0, py + 1.0, pz + 1.0)
 		var v3 := Vector3(x0, py + 1.0, pz)
 		var normal := Vector3(1, 0, 0)
-		_push_quad_data(vertices, normals, colors, v0, v1, v2, v3, normal, color)
+		_push_quad_verts(vertices, normals, v0, v1, v2, v3, normal)
 	else:
 		var x0 := px
 		var v0 := Vector3(x0, py, pz + 1.0)
@@ -286,10 +279,10 @@ func _add_face_x_data(vertices: PackedVector3Array, normals: PackedVector3Array,
 		var v2 := Vector3(x0, py + 1.0, pz)
 		var v3 := Vector3(x0, py + 1.0, pz + 1.0)
 		var normal := Vector3(-1, 0, 0)
-		_push_quad_data(vertices, normals, colors, v0, v1, v2, v3, normal, color)
+		_push_quad_verts(vertices, normals, v0, v1, v2, v3, normal)
 
 
-func _add_face_y_data(vertices: PackedVector3Array, normals: PackedVector3Array, colors: PackedColorArray, x: int, y: int, z: int, positive: bool, color: Color) -> void:
+func _add_face_y_data(vertices: PackedVector3Array, normals: PackedVector3Array, x: int, y: int, z: int, positive: bool) -> void:
 	var px := float(x)
 	var py := float(y)
 	var pz := float(z)
@@ -301,7 +294,7 @@ func _add_face_y_data(vertices: PackedVector3Array, normals: PackedVector3Array,
 		var v2 := Vector3(px + 1.0, y0, pz + 1.0)
 		var v3 := Vector3(px, y0, pz + 1.0)
 		var normal := Vector3(0, 1, 0)
-		_push_quad_data(vertices, normals, colors, v0, v1, v2, v3, normal, color)
+		_push_quad_verts(vertices, normals, v0, v1, v2, v3, normal)
 	else:
 		var y0 := py
 		var v0 := Vector3(px, y0, pz + 1.0)
@@ -309,10 +302,10 @@ func _add_face_y_data(vertices: PackedVector3Array, normals: PackedVector3Array,
 		var v2 := Vector3(px + 1.0, y0, pz)
 		var v3 := Vector3(px, y0, pz)
 		var normal := Vector3(0, -1, 0)
-		_push_quad_data(vertices, normals, colors, v0, v1, v2, v3, normal, color)
+		_push_quad_verts(vertices, normals, v0, v1, v2, v3, normal)
 
 
-func _add_face_z_data(vertices: PackedVector3Array, normals: PackedVector3Array, colors: PackedColorArray, x: int, y: int, z: int, positive: bool, color: Color) -> void:
+func _add_face_z_data(vertices: PackedVector3Array, normals: PackedVector3Array, x: int, y: int, z: int, positive: bool) -> void:
 	var px := float(x)
 	var py := float(y)
 	var pz := float(z)
@@ -324,7 +317,7 @@ func _add_face_z_data(vertices: PackedVector3Array, normals: PackedVector3Array,
 		var v2 := Vector3(px + 1.0, py + 1.0, z0)
 		var v3 := Vector3(px, py + 1.0, z0)
 		var normal := Vector3(0, 0, 1)
-		_push_quad_data(vertices, normals, colors, v0, v1, v2, v3, normal, color)
+		_push_quad_verts(vertices, normals, v0, v1, v2, v3, normal)
 	else:
 		var z0 := pz
 		var v0 := Vector3(px + 1.0, py, z0)
@@ -332,10 +325,10 @@ func _add_face_z_data(vertices: PackedVector3Array, normals: PackedVector3Array,
 		var v2 := Vector3(px, py + 1.0, z0)
 		var v3 := Vector3(px + 1.0, py + 1.0, z0)
 		var normal := Vector3(0, 0, -1)
-		_push_quad_data(vertices, normals, colors, v0, v1, v2, v3, normal, color)
+		_push_quad_verts(vertices, normals, v0, v1, v2, v3, normal)
 
 
-func _push_quad_data(vertices: PackedVector3Array, normals: PackedVector3Array, colors: PackedColorArray, v0: Vector3, v1: Vector3, v2: Vector3, v3: Vector3, normal: Vector3, color: Color) -> void:
+func _push_quad_verts(vertices: PackedVector3Array, normals: PackedVector3Array, v0: Vector3, v1: Vector3, v2: Vector3, v3: Vector3, normal: Vector3) -> void:
 	# Triangle 1: v0, v1, v2
 	vertices.append(v0)
 	vertices.append(v1)
@@ -343,9 +336,6 @@ func _push_quad_data(vertices: PackedVector3Array, normals: PackedVector3Array, 
 	normals.append(normal)
 	normals.append(normal)
 	normals.append(normal)
-	colors.append(color)
-	colors.append(color)
-	colors.append(color)
 	
 	# Triangle 2: v0, v2, v3
 	vertices.append(v0)
@@ -354,9 +344,6 @@ func _push_quad_data(vertices: PackedVector3Array, normals: PackedVector3Array, 
 	normals.append(normal)
 	normals.append(normal)
 	normals.append(normal)
-	colors.append(color)
-	colors.append(color)
-	colors.append(color)
 
 
 func _finalize_ready_chunks() -> void:

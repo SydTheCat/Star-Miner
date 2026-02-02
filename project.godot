@@ -15,6 +15,10 @@ run/main_scene="uid://cdd837w27t4ia"
 config/features=PackedStringArray("4.5", "Forward Plus")
 config/icon="res://icon.svg"
 
+[autoload]
+
+BlockTextures="*res://Data/BlockTextures.gd"
+
 [input]
 
 move_forward={

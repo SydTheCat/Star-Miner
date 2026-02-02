@@ -1,6 +1,7 @@
-[gd_scene load_steps=5 format=3 uid="uid://cdd837w27t4ia"]
+[gd_scene load_steps=6 format=3 uid="uid://cdd837w27t4ia"]
 
 [ext_resource type="Script" uid="uid://cyksuth7204m2" path="res://Scripts/main.gd" id="1_jjgbg"]
+[ext_resource type="PackedScene" uid="uid://hotbar123" path="res://UI/Hotbar.tscn" id="2_hotbar"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_sky"]
 sky_top_color = Color(0.3, 0.5, 0.9, 1)
@@ -39,4 +40,6 @@ light_energy = 1.2
 light_angular_distance = 0.5
 shadow_enabled = true
 shadow_opacity = 0.8
+
+[node name="Hotbar" parent="." instance=ExtResource("2_hotbar")]
 

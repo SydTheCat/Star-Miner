@@ -20,7 +20,7 @@ uniform vec3 mie_color : source_color = vec3(1.0, 0.95, 0.85);
 
 // Night sky
 uniform float star_intensity : hint_range(0.0, 5.0) = 2.5;
-uniform float star_threshold : hint_range(0.0, 1.0) = 0.97;  // Higher = fewer stars
+uniform float star_threshold : hint_range(0.0, 1.0) = 0.992;  // Higher = fewer stars
 uniform float night_sky_brightness : hint_range(0.0, 0.5) = 0.03;
 uniform vec3 night_color : source_color = vec3(0.02, 0.02, 0.06);
 
@@ -51,8 +51,8 @@ float noise3d(vec3 p) {
 
 // Generate stars - simple and reliable
 float stars(vec3 dir) {
-    // Create a grid in the sky
-    vec3 p = dir * 200.0;
+    // Create a grid in the sky (lower = bigger stars)
+    vec3 p = dir * 80.0;
     vec3 cell = floor(p);
     vec3 local = fract(p) - 0.5;
     
@@ -74,8 +74,8 @@ float stars(vec3 dir) {
     // Distance from star center
     float dist = length(local - star_offset);
     
-    // Sharp star point
-    float star_point = 1.0 - smoothstep(0.0, 0.15, dist);
+    // Sharp star point (larger smoothstep range = bigger stars)
+    float star_point = 1.0 - smoothstep(0.0, 0.25, dist);
     
     // Brightness variation per star
     float brightness = 0.5 + 0.5 * hash(cell + vec3(42.0));
