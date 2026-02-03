@@ -1,6 +1,7 @@
-[gd_scene load_steps=3 format=3 uid="uid://bewrwv1tig1sj"]
+[gd_scene load_steps=4 format=3 uid="uid://bewrwv1tig1sj"]
 
 [ext_resource type="Script" uid="uid://ux2pwaggf7x6" path="res://Scripts/player.gd" id="1_v0iea"]
+[ext_resource type="PackedScene" path="res://Scenes/ray_gun.tscn" id="2_raygun"]
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_cvnsp"]
 radius = 0.3
@@ -13,6 +14,9 @@ script = ExtResource("1_v0iea")
 [node name="Head" type="Node3D" parent="."]
 
 [node name="Camera3D" type="Camera3D" parent="Head"]
+
+[node name="RayGun" parent="Head/Camera3D" instance=ExtResource("2_raygun")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.35, -0.25, -0.5)
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="."]
 shape = SubResource("CapsuleShape3D_cvnsp")

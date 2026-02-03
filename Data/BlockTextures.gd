@@ -99,16 +99,45 @@ func _build_atlas() -> void:
 	uv_rects[str(BlockTypes.BLOCK_WATER) + ":bottom"] = water_uv
 	uv_rects[str(BlockTypes.BLOCK_WATER) + ":side"] = water_uv
 	
-	# Wood uses a brown color (slot 5).
-	var wood_x := (5 % ATLAS_COLUMNS) * TEXTURE_SIZE
-	var wood_y := (5 / ATLAS_COLUMNS) * TEXTURE_SIZE
-	for y in TEXTURE_SIZE:
-		for x in TEXTURE_SIZE:
-			atlas_image.set_pixel(wood_x + x, wood_y + y, Color(0.4, 0.26, 0.13, 1.0))
-	var wood_uv := Rect2(Vector2(float(5 % ATLAS_COLUMNS) / ATLAS_COLUMNS, float(5 / ATLAS_COLUMNS) / ATLAS_ROWS), Vector2(1.0 / ATLAS_COLUMNS, 1.0 / ATLAS_ROWS))
-	uv_rects[str(BlockTypes.BLOCK_WOOD) + ":top"] = wood_uv
-	uv_rects[str(BlockTypes.BLOCK_WOOD) + ":bottom"] = wood_uv
-	uv_rects[str(BlockTypes.BLOCK_WOOD) + ":side"] = wood_uv
+	# Wood uses log textures (slots 5, 7, 8 for top, side, bottom).
+	# Log top (slot 5).
+	var log_top_tex := load("res://Textures/log_top.png") as Texture2D
+	var log_top_x := (5 % ATLAS_COLUMNS) * TEXTURE_SIZE
+	var log_top_y := (5 / ATLAS_COLUMNS) * TEXTURE_SIZE
+	if log_top_tex:
+		var log_top_img := log_top_tex.get_image()
+		if log_top_img.get_format() != Image.FORMAT_RGBA8:
+			log_top_img.convert(Image.FORMAT_RGBA8)
+		log_top_img.resize(TEXTURE_SIZE, TEXTURE_SIZE, Image.INTERPOLATE_NEAREST)
+		atlas_image.blit_rect(log_top_img, Rect2i(0, 0, TEXTURE_SIZE, TEXTURE_SIZE), Vector2i(log_top_x, log_top_y))
+	var wood_top_uv := Rect2(Vector2(float(5 % ATLAS_COLUMNS) / ATLAS_COLUMNS, float(5 / ATLAS_COLUMNS) / ATLAS_ROWS), Vector2(1.0 / ATLAS_COLUMNS, 1.0 / ATLAS_ROWS))
+	uv_rects[str(BlockTypes.BLOCK_WOOD) + ":top"] = wood_top_uv
+	
+	# Log side (slot 7).
+	var log_side_tex := load("res://Textures/log_side.png") as Texture2D
+	var log_side_x := (7 % ATLAS_COLUMNS) * TEXTURE_SIZE
+	var log_side_y := (7 / ATLAS_COLUMNS) * TEXTURE_SIZE
+	if log_side_tex:
+		var log_side_img := log_side_tex.get_image()
+		if log_side_img.get_format() != Image.FORMAT_RGBA8:
+			log_side_img.convert(Image.FORMAT_RGBA8)
+		log_side_img.resize(TEXTURE_SIZE, TEXTURE_SIZE, Image.INTERPOLATE_NEAREST)
+		atlas_image.blit_rect(log_side_img, Rect2i(0, 0, TEXTURE_SIZE, TEXTURE_SIZE), Vector2i(log_side_x, log_side_y))
+	var wood_side_uv := Rect2(Vector2(float(7 % ATLAS_COLUMNS) / ATLAS_COLUMNS, float(7 / ATLAS_COLUMNS) / ATLAS_ROWS), Vector2(1.0 / ATLAS_COLUMNS, 1.0 / ATLAS_ROWS))
+	uv_rects[str(BlockTypes.BLOCK_WOOD) + ":side"] = wood_side_uv
+	
+	# Log bottom (slot 8).
+	var log_bottom_tex := load("res://Textures/log_bottom.png") as Texture2D
+	var log_bottom_x := (8 % ATLAS_COLUMNS) * TEXTURE_SIZE
+	var log_bottom_y := (8 / ATLAS_COLUMNS) * TEXTURE_SIZE
+	if log_bottom_tex:
+		var log_bottom_img := log_bottom_tex.get_image()
+		if log_bottom_img.get_format() != Image.FORMAT_RGBA8:
+			log_bottom_img.convert(Image.FORMAT_RGBA8)
+		log_bottom_img.resize(TEXTURE_SIZE, TEXTURE_SIZE, Image.INTERPOLATE_NEAREST)
+		atlas_image.blit_rect(log_bottom_img, Rect2i(0, 0, TEXTURE_SIZE, TEXTURE_SIZE), Vector2i(log_bottom_x, log_bottom_y))
+	var wood_bottom_uv := Rect2(Vector2(float(8 % ATLAS_COLUMNS) / ATLAS_COLUMNS, float(8 / ATLAS_COLUMNS) / ATLAS_ROWS), Vector2(1.0 / ATLAS_COLUMNS, 1.0 / ATLAS_ROWS))
+	uv_rects[str(BlockTypes.BLOCK_WOOD) + ":bottom"] = wood_bottom_uv
 	
 	# Leaves uses leaves.png texture tinted green (slot 6).
 	var leaves_tex := load("res://Textures/leaves.png") as Texture2D
@@ -154,3 +183,23 @@ func get_uv_rect(block_id: int, face: String) -> Rect2:
 		return uv_rects[key]
 	# Fallback to magenta (0,0 in atlas which is grass_top, but we'll use a default)
 	return Rect2(Vector2.ZERO, Vector2(1.0 / ATLAS_COLUMNS, 1.0 / ATLAS_ROWS))
+
+
+func get_block_texture(block_id: int, face: String) -> AtlasTexture:
+	# Returns an AtlasTexture for the specified block face, suitable for UI display.
+	if not _initialized:
+		_build_atlas()
+	
+	var uv_rect := get_uv_rect(block_id, face)
+	var atlas_tex := AtlasTexture.new()
+	atlas_tex.atlas = atlas_texture
+	
+	# Convert UV rect (0-1) to pixel rect.
+	var atlas_size := Vector2(ATLAS_COLUMNS * TEXTURE_SIZE, ATLAS_ROWS * TEXTURE_SIZE)
+	atlas_tex.region = Rect2(
+		uv_rect.position * atlas_size,
+		uv_rect.size * atlas_size
+	)
+	atlas_tex.filter_clip = true
+	
+	return atlas_tex

@@ -1,7 +1,10 @@
 extends Control
 
 const BlockTypes = preload("res://Data/BlockTypes.gd")
+const BlockTextures = preload("res://Data/BlockTextures.gd")
 const HotbarSlotScript = preload("res://UI/HotbarSlot.gd")
+
+var block_textures: Node = null
 
 const SLOT_COUNT := 10
 
@@ -65,13 +68,15 @@ func _create_slot_ui() -> void:
 		hotkey_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		slot.add_child(hotkey_label)
 		
-		# Add block indicator.
-		var block_indicator := ColorRect.new()
-		block_indicator.name = "BlockColor"
+		# Add block indicator (texture).
+		var block_indicator := TextureRect.new()
+		block_indicator.name = "BlockTexture"
 		block_indicator.position = Vector2(10, 10)
 		block_indicator.size = Vector2(30, 30)
-		block_indicator.color = _get_block_color(slots[i])
+		block_indicator.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		block_indicator.stretch_mode = TextureRect.STRETCH_SCALE
 		block_indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_update_block_texture(block_indicator, slots[i])
 		slot.add_child(block_indicator)
 		
 		# Add count label (bottom-right corner).
@@ -211,12 +216,12 @@ func _update_slot_display(index: int) -> void:
 	if index < 0 or index >= slot_container.get_child_count():
 		return
 	var slot: Panel = slot_container.get_child(index)
-	var block_color: ColorRect = slot.get_node("BlockColor")
-	var count_label: Label = slot.get_node("CountLabel")
+	var block_texture: TextureRect = slot.get_node_or_null("BlockTexture")
+	var count_label: Label = slot.get_node_or_null("CountLabel")
 	
 	var block_id: int = slots[index]
-	if block_color:
-		block_color.color = _get_block_color(block_id)
+	if block_texture:
+		_update_block_texture(block_texture, block_id)
 	
 	if count_label:
 		var count: int = inventory.get(block_id, 0)
@@ -224,6 +229,25 @@ func _update_slot_display(index: int) -> void:
 			count_label.text = str(count)
 		else:
 			count_label.text = ""
+
+
+func _ensure_block_textures() -> void:
+	if block_textures:
+		return
+	block_textures = get_tree().root.get_node_or_null("BlockTextures")
+	if block_textures == null:
+		block_textures = BlockTextures.new()
+		block_textures.name = "BlockTextures"
+		get_tree().root.add_child(block_textures)
+
+
+func _update_block_texture(tex_rect: TextureRect, block_id: int) -> void:
+	_ensure_block_textures()
+	if block_id == BlockTypes.BLOCK_AIR or block_textures == null:
+		tex_rect.texture = null
+		return
+	var tex: AtlasTexture = block_textures.get_block_texture(block_id, "side")
+	tex_rect.texture = tex
 
 
 func add_block(block_id: int, amount: int = 1) -> void:

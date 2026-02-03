@@ -82,3 +82,14 @@ func add_to_inventory(block_type: int, count: int = 1) -> void:
 
 func get_inventory_count(block_type: int) -> int:
 	return inventory.get(block_type, 0)
+
+
+func remove_from_inventory(block_type: int, count: int = 1) -> bool:
+	if not inventory.has(block_type):
+		return false
+	if inventory[block_type] < count:
+		return false
+	inventory[block_type] -= count
+	if inventory[block_type] <= 0:
+		inventory.erase(block_type)
+	return true

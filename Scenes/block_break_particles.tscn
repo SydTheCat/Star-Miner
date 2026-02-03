@@ -1,0 +1,7 @@
+[gd_scene load_steps=2 format=3 uid="uid://dh7k2m4oap1q3"]
+
+[ext_resource type="Script" uid="uid://cnokqp7pc54bb" path="res://Scripts/block_break_particles.gd" id="1_particles"]
+
+[node name="BlockBreakParticles" type="Node3D"]
+script = ExtResource("1_particles")
+particle_count = 20

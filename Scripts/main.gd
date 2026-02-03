@@ -3,6 +3,7 @@ extends Node3D
 const PLAYER_SCENE := preload("res://Scenes/player.tscn")
 const VOXEL_WORLD_SCENE := preload("res://World/VoxelWorld.tscn")
 const INVENTORY_UI_SCENE := preload("res://Scenes/inventory_ui.tscn")
+const BLOCK_BREAK_PARTICLES_SCENE := preload("res://Scenes/block_break_particles.tscn")
 const BlockTypes = preload("res://Data/BlockTypes.gd")
 
 var player: CharacterBody3D
@@ -472,12 +473,42 @@ func _break_block() -> void:
 	# Get the block type before breaking.
 	var block_id: int = voxel_world.get_block_global(target_block_pos.x, target_block_pos.y, target_block_pos.z)
 	
+	if block_id == BlockTypes.BLOCK_AIR:
+		return
+	
+	# Spawn particle effect.
+	_spawn_break_particles(Vector3(target_block_pos), block_id)
+	
 	# Set block to air.
 	voxel_world.set_block_global(target_block_pos.x, target_block_pos.y, target_block_pos.z, BlockTypes.BLOCK_AIR)
 	
 	# Add to inventory.
-	if hotbar and block_id != BlockTypes.BLOCK_AIR:
+	if hotbar:
 		hotbar.add_block(block_id)
+
+
+func _spawn_break_particles(pos: Vector3, block_id: int) -> void:
+	var particles := BLOCK_BREAK_PARTICLES_SCENE.instantiate()
+	add_child(particles)
+	particles.setup(pos, _get_block_color(block_id), player)
+
+
+func _get_block_color(block_id: int) -> Color:
+	match block_id:
+		BlockTypes.BLOCK_GRASS:
+			return Color(0.42, 0.65, 0.31)  # Bright grass green.
+		BlockTypes.BLOCK_DIRT:
+			return Color(0.55, 0.36, 0.24)  # Earthy brown.
+		BlockTypes.BLOCK_STONE:
+			return Color(0.55, 0.55, 0.55)  # Medium gray.
+		BlockTypes.BLOCK_WATER:
+			return Color(0.2, 0.5, 0.9, 0.8)  # Transparent blue.
+		BlockTypes.BLOCK_WOOD:
+			return Color(0.45, 0.32, 0.18)  # Log bark brown.
+		BlockTypes.BLOCK_LEAVES:
+			return Color(0.25, 0.55, 0.18)  # Dark foliage green.
+		_:
+			return Color(0.6, 0.6, 0.6)  # Default gray.
 
 
 func _place_block() -> void:

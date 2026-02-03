@@ -4,8 +4,10 @@ extends RigidBody3D
 # Falls with physics, can be collected by player on touch.
 
 const BlockTypes = preload("res://Data/BlockTypes.gd")
+const BlockTextures = preload("res://Data/BlockTextures.gd")
 
 var block_type: int = BlockTypes.BLOCK_WOOD
+var block_textures: Node = null
 var has_landed: bool = false
 var land_timer: float = 0.0
 var collected: bool = false
@@ -54,29 +56,98 @@ func _check_player_pickup() -> void:
 
 
 func _setup_visual() -> void:
-	# Create a simple colored box for the falling block.
-	var box := BoxMesh.new()
-	box.size = Vector3(0.5, 0.5, 0.5)  # Smaller pickup size.
-	mesh_instance.mesh = box
+	# Get or create the block textures singleton.
+	block_textures = get_tree().root.get_node_or_null("BlockTextures")
+	if block_textures == null:
+		block_textures = BlockTextures.new()
+		block_textures.name = "BlockTextures"
+		get_tree().root.add_child(block_textures)
 	
-	# Set material based on block type.
+	# Create a custom mesh with proper UVs for the block texture.
+	var mesh := _create_textured_box(0.5)
+	mesh_instance.mesh = mesh
+	
+	# Set material with atlas texture.
 	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	
-	match block_type:
-		BlockTypes.BLOCK_WOOD:
-			mat.albedo_color = Color(0.4, 0.26, 0.13, 1.0)
-		BlockTypes.BLOCK_LEAVES:
-			var leaves_tex := load("res://Textures/leaves.png") as Texture2D
-			if leaves_tex:
-				mat.albedo_texture = leaves_tex
-				mat.albedo_color = Color(0.3, 0.7, 0.2, 1.0)  # Green tint.
-			else:
-				mat.albedo_color = Color(0.2, 0.5, 0.15, 1.0)
-		_:
-			mat.albedo_color = Color(1.0, 0.0, 1.0, 1.0)  # Magenta for unknown.
-	
+	mat.albedo_texture = block_textures.get_atlas()
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
 	mesh_instance.material_override = mat
+
+
+func _create_textured_box(size: float) -> ArrayMesh:
+	var half := size / 2.0
+	var mesh := ArrayMesh.new()
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	
+	# Get UV rects for each face.
+	var uv_top: Rect2 = block_textures.get_uv_rect(block_type, "top")
+	var uv_bottom: Rect2 = block_textures.get_uv_rect(block_type, "bottom")
+	var uv_side: Rect2 = block_textures.get_uv_rect(block_type, "side")
+	
+	# Top face (+Y).
+	_add_face(st, 
+		Vector3(-half, half, -half), Vector3(half, half, -half),
+		Vector3(half, half, half), Vector3(-half, half, half),
+		Vector3.UP, uv_top)
+	
+	# Bottom face (-Y).
+	_add_face(st,
+		Vector3(-half, -half, half), Vector3(half, -half, half),
+		Vector3(half, -half, -half), Vector3(-half, -half, -half),
+		Vector3.DOWN, uv_bottom)
+	
+	# Front face (+Z).
+	_add_face(st,
+		Vector3(-half, -half, half), Vector3(-half, half, half),
+		Vector3(half, half, half), Vector3(half, -half, half),
+		Vector3.BACK, uv_side)
+	
+	# Back face (-Z).
+	_add_face(st,
+		Vector3(half, -half, -half), Vector3(half, half, -half),
+		Vector3(-half, half, -half), Vector3(-half, -half, -half),
+		Vector3.FORWARD, uv_side)
+	
+	# Right face (+X).
+	_add_face(st,
+		Vector3(half, -half, half), Vector3(half, half, half),
+		Vector3(half, half, -half), Vector3(half, -half, -half),
+		Vector3.RIGHT, uv_side)
+	
+	# Left face (-X).
+	_add_face(st,
+		Vector3(-half, -half, -half), Vector3(-half, half, -half),
+		Vector3(-half, half, half), Vector3(-half, -half, half),
+		Vector3.LEFT, uv_side)
+	
+	st.generate_tangents()
+	return st.commit()
+
+
+func _add_face(st: SurfaceTool, v0: Vector3, v1: Vector3, v2: Vector3, v3: Vector3, normal: Vector3, uv_rect: Rect2) -> void:
+	var uv0 := uv_rect.position
+	var uv1 := Vector2(uv_rect.position.x, uv_rect.end.y)
+	var uv2 := uv_rect.end
+	var uv3 := Vector2(uv_rect.end.x, uv_rect.position.y)
+	
+	st.set_normal(normal)
+	
+	# First triangle.
+	st.set_uv(uv0)
+	st.add_vertex(v0)
+	st.set_uv(uv1)
+	st.add_vertex(v1)
+	st.set_uv(uv2)
+	st.add_vertex(v2)
+	
+	# Second triangle.
+	st.set_uv(uv0)
+	st.add_vertex(v0)
+	st.set_uv(uv2)
+	st.add_vertex(v2)
+	st.set_uv(uv3)
+	st.add_vertex(v3)
 
 
 func _on_body_entered(body: Node) -> void:

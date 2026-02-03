@@ -4,7 +4,10 @@ extends Control
 # Toggle with Tab key.
 
 const BlockTypes = preload("res://Data/BlockTypes.gd")
+const BlockTextures = preload("res://Data/BlockTextures.gd")
 const InventorySlotScript = preload("res://UI/InventorySlot.gd")
+
+var block_textures: Node = null
 
 signal inventory_opened
 signal inventory_closed
@@ -77,9 +80,15 @@ func _assign_to_hotbar(slot_index: int) -> void:
 	if hotbar:
 		hotbar.set_slot_block(slot_index, selected_block_id)
 		print("Assigned ", BlockTypes.get_block_name(selected_block_id), " to hotbar slot ", slot_index + 1)
+		
+		# Note: We don't remove from inventory here - the hotbar just references what block type is in each slot.
+		# The actual count stays in the player inventory and is used when placing blocks.
+		
 		_update_selection_label()
 		# Deselect after assignment.
 		_clear_selection()
+		# Refresh the inventory display.
+		refresh_inventory()
 
 
 func set_player(p: Node) -> void:
@@ -121,13 +130,21 @@ func refresh_inventory() -> void:
 	if player == null:
 		return
 	
-	# Get inventory from player.
-	var inventory: Dictionary = player.inventory
+	# Get hotbar to check which items are assigned.
+	var hotbar := get_tree().current_scene.get_node_or_null("Hotbar")
+	var hotbar_block_ids: Array[int] = []
+	if hotbar:
+		for slot_block_id in hotbar.slots:
+			if slot_block_id != BlockTypes.BLOCK_AIR and slot_block_id not in hotbar_block_ids:
+				hotbar_block_ids.append(slot_block_id)
 	
-	# Add item slots for each block type in inventory.
-	for block_id in inventory.keys():
-		var count: int = inventory[block_id]
-		if count > 0:
+	# Get inventory from player.
+	var inv: Dictionary = player.inventory
+	
+	# Add item slots for each block type in inventory (excluding hotbar items).
+	for block_id in inv.keys():
+		var count: int = inv[block_id]
+		if count > 0 and block_id not in hotbar_block_ids:
 			_add_item_slot(block_id, count)
 	
 	# Add empty slots to fill the grid.
@@ -140,12 +157,33 @@ func refresh_inventory() -> void:
 func _add_item_slot(block_id: int, count: int) -> void:
 	var slot := _create_draggable_slot(block_id, count)
 	
-	# Add block icon.
-	var icon := ColorRect.new()
+	# Ensure block textures are loaded.
+	_ensure_block_textures()
+	
+	# Add block icon using texture from atlas.
+	var icon := TextureRect.new()
 	icon.custom_minimum_size = Vector2(48, 48)
-	icon.color = _get_block_color(block_id)
+	icon.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
+	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	slot.add_child(icon)
+	
+	if block_textures:
+		# Get the side texture for this block from the atlas.
+		var tex: AtlasTexture = block_textures.get_block_texture(block_id, "side")
+		if tex:
+			icon.texture = tex
+		else:
+			# Fallback to color rect if texture not found.
+			icon.queue_free()
+			var color_icon := ColorRect.new()
+			color_icon.custom_minimum_size = Vector2(48, 48)
+			color_icon.color = _get_block_color(block_id)
+			color_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			slot.add_child(color_icon)
+			icon = null
+	
+	if icon:
+		slot.add_child(icon)
 	
 	# Add count label.
 	var count_label := Label.new()
@@ -254,6 +292,16 @@ func _add_empty_slot() -> void:
 	item_grid.add_child(slot)
 
 
+func _ensure_block_textures() -> void:
+	if block_textures:
+		return
+	block_textures = get_tree().root.get_node_or_null("BlockTextures")
+	if block_textures == null:
+		block_textures = BlockTextures.new()
+		block_textures.name = "BlockTextures"
+		get_tree().root.add_child(block_textures)
+
+
 func _create_slot_panel() -> Panel:
 	var slot := Panel.new()
 	slot.custom_minimum_size = Vector2(64, 64)
@@ -281,19 +329,19 @@ func _create_slot_panel() -> Panel:
 func _get_block_color(block_id: int) -> Color:
 	match block_id:
 		BlockTypes.BLOCK_GRASS:
-			return Color(0.3, 0.6, 0.2)
+			return Color(0.42, 0.65, 0.31)  # Bright grass green.
 		BlockTypes.BLOCK_DIRT:
-			return Color(0.5, 0.35, 0.2)
+			return Color(0.55, 0.36, 0.24)  # Earthy brown.
 		BlockTypes.BLOCK_STONE:
-			return Color(0.5, 0.5, 0.5)
+			return Color(0.55, 0.55, 0.55)  # Medium gray.
 		BlockTypes.BLOCK_WATER:
-			return Color(0.2, 0.5, 0.9)
+			return Color(0.2, 0.5, 0.9, 0.8)  # Transparent blue.
 		BlockTypes.BLOCK_WOOD:
-			return Color(0.4, 0.26, 0.13)
+			return Color(0.45, 0.32, 0.18)  # Log bark brown.
 		BlockTypes.BLOCK_LEAVES:
-			return Color(0.3, 0.7, 0.2)
+			return Color(0.25, 0.55, 0.18)  # Dark foliage green.
 		_:
-			return Color(1.0, 0.0, 1.0)
+			return Color(0.6, 0.6, 0.6)  # Default gray.
 
 
 func _on_slot_hover(slot: Panel) -> void:
