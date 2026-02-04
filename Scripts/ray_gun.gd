@@ -10,6 +10,7 @@ var beam_light: OmniLight3D
 var alt_particles: GPUParticles3D
 var alt_light: OmniLight3D
 var tip_position := Vector3(0, 0.01, -0.43)
+var fire_sound: AudioStreamPlayer3D
 
 # Animation variables.
 var base_position := Vector3.ZERO
@@ -35,12 +36,16 @@ func _ready() -> void:
 	_create_gun_mesh()
 	_create_beam_particles()
 	_create_alt_particles()
+	_create_fire_sound()
 	base_position = position
 
 
 func _process(delta: float) -> void:
+	# Don't fire when mouse is not captured (inventory open, etc).
+	var can_fire := Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED
+	
 	# Check for primary fire input (left mouse button).
-	if Input.is_action_pressed("break_block"):
+	if can_fire and Input.is_action_pressed("break_block"):
 		if not is_firing:
 			_start_firing()
 	else:
@@ -48,7 +53,7 @@ func _process(delta: float) -> void:
 			_stop_firing()
 	
 	# Check for secondary fire input (right mouse button).
-	if Input.is_action_pressed("place_block"):
+	if can_fire and Input.is_action_pressed("place_block"):
 		if not is_firing_alt:
 			_start_firing_alt()
 	else:
@@ -91,6 +96,8 @@ func _start_firing() -> void:
 	is_firing = true
 	beam_particles.emitting = true
 	beam_light.visible = true
+	if fire_sound and not fire_sound.playing:
+		fire_sound.play()
 	# Emit signal with global position and direction.
 	var tip_global := global_transform * tip_position
 	var direction := -global_transform.basis.z
@@ -101,6 +108,8 @@ func _stop_firing() -> void:
 	is_firing = false
 	beam_particles.emitting = false
 	beam_light.visible = false
+	if fire_sound and fire_sound.playing:
+		fire_sound.stop()
 
 
 func _start_firing_alt() -> void:
@@ -250,3 +259,12 @@ func _create_alt_particles() -> void:
 	alt_light.omni_range = 4.0
 	alt_light.visible = false
 	add_child(alt_light)
+
+
+func _create_fire_sound() -> void:
+	fire_sound = AudioStreamPlayer3D.new()
+	fire_sound.stream = load("res://Assets/SoundFX/laser-weld.mp3")
+	fire_sound.volume_db = 0.0
+	fire_sound.max_distance = 20.0
+	fire_sound.position = tip_position
+	add_child(fire_sound)

@@ -48,9 +48,13 @@ func _check_player_pickup() -> void:
 	
 	var bodies := pickup_area.get_overlapping_bodies()
 	for body in bodies:
-		if body.has_method("add_to_inventory"):
-			body.add_to_inventory(block_type, 1)
+		if body is CharacterBody3D:
+			# Find the hotbar and add to it.
+			var hotbar := get_tree().current_scene.get_node_or_null("Hotbar")
+			if hotbar and hotbar.has_method("add_block"):
+				hotbar.add_block(block_type, 1)
 			collected = true
+			_play_pickup_sound()
 			queue_free()
 			return
 
@@ -166,7 +170,22 @@ func _on_pickup_area_body_entered(body: Node) -> void:
 		return
 	
 	# Check if it's the player.
-	if body.has_method("add_to_inventory"):
-		body.add_to_inventory(block_type, 1)
+	if body is CharacterBody3D:
+		# Find the hotbar and add to it.
+		var hotbar := get_tree().current_scene.get_node_or_null("Hotbar")
+		if hotbar and hotbar.has_method("add_block"):
+			hotbar.add_block(block_type, 1)
 		collected = true
+		_play_pickup_sound()
 		queue_free()
+
+
+func _play_pickup_sound() -> void:
+	var sound := AudioStreamPlayer.new()
+	sound.stream = load("res://Assets/SoundFX/multi-pop.mp3")
+	sound.volume_db = 0.0
+	get_tree().current_scene.add_child(sound)
+	sound.play()
+	sound.finished.connect(sound.queue_free)
+
+

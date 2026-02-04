@@ -22,6 +22,8 @@ var voxel_world: Node3D = null
 # Deferred collision generation.
 var collision_pending: bool = false
 var cached_mesh: ArrayMesh = null
+static var chunks_building_collision: int = 0
+const MAX_COLLISION_BUILDS_PER_FRAME := 1
 
 @onready var mesh_instance: MeshInstance3D = $MeshInstance
 @onready var collider_shape: CollisionShape3D = $Collider/CollisionShape3D
@@ -36,9 +38,13 @@ func _ready() -> void:
 
 func _process(_delta: float) -> void:
 	# Handle deferred collision generation.
+	# Limit to MAX_COLLISION_BUILDS_PER_FRAME chunks building collision per frame.
 	if collision_pending and cached_mesh != null:
-		_build_collision_deferred()
-		collision_pending = false
+		if chunks_building_collision < MAX_COLLISION_BUILDS_PER_FRAME:
+			chunks_building_collision += 1
+			_build_collision_deferred()
+			collision_pending = false
+			chunks_building_collision -= 1
 
 
 func _allocate_block_storage() -> void:
@@ -215,16 +221,149 @@ func update_mesh() -> void:
 
 
 func _build_collision_deferred() -> void:
-	# Build collision from cached mesh (called from _process).
-	if cached_mesh != null and cached_mesh.get_surface_count() > 0:
-		var shape := cached_mesh.create_trimesh_shape()
-		if shape != null:
-			collider_shape.shape = shape
-		else:
-			collider_shape.shape = null
-	else:
-		collider_shape.shape = null
+	# Build collision only for exposed faces (adjacent to air).
+	# This is much faster than generating all faces.
+	
+	# Clear existing shape.
+	collider_shape.shape = null
+	
+	# Create a compound shape with only exposed faces.
+	var compound := ConcavePolygonShape3D.new()
+	var faces := PackedVector3Array()
+	
+	var size_x := CHUNK_SIZE_X
+	var size_y := CHUNK_SIZE_Y
+	var size_z := CHUNK_SIZE_Z
+	var size_xz := size_x * size_z
+	
+	for y in size_y:
+		for z in size_z:
+			for x in size_x:
+				var index := x + z * size_x + y * size_xz
+				var block_id: int = blocks[index]
+				
+				if block_id == BlockTypes.BLOCK_AIR or block_id == BlockTypes.BLOCK_WATER:
+					continue
+				
+				var px := float(x)
+				var py := float(y)
+				var pz := float(z)
+				
+				# Only add faces that are exposed (adjacent to air).
+				# Top face (+Y)
+				if y < size_y - 1:
+					if blocks[index + size_xz] == BlockTypes.BLOCK_AIR:
+						faces.append(Vector3(px, py + 1, pz))
+						faces.append(Vector3(px + 1, py + 1, pz))
+						faces.append(Vector3(px + 1, py + 1, pz + 1))
+						faces.append(Vector3(px, py + 1, pz))
+						faces.append(Vector3(px + 1, py + 1, pz + 1))
+						faces.append(Vector3(px, py + 1, pz + 1))
+				elif get_neighbor_block(x, y + 1, z) == BlockTypes.BLOCK_AIR:
+					faces.append(Vector3(px, py + 1, pz))
+					faces.append(Vector3(px + 1, py + 1, pz))
+					faces.append(Vector3(px + 1, py + 1, pz + 1))
+					faces.append(Vector3(px, py + 1, pz))
+					faces.append(Vector3(px + 1, py + 1, pz + 1))
+					faces.append(Vector3(px, py + 1, pz + 1))
+				
+				# Bottom face (-Y)
+				if y > 0:
+					if blocks[index - size_xz] == BlockTypes.BLOCK_AIR:
+						faces.append(Vector3(px, py, pz + 1))
+						faces.append(Vector3(px + 1, py, pz + 1))
+						faces.append(Vector3(px + 1, py, pz))
+						faces.append(Vector3(px, py, pz + 1))
+						faces.append(Vector3(px + 1, py, pz))
+						faces.append(Vector3(px, py, pz))
+				elif get_neighbor_block(x, y - 1, z) == BlockTypes.BLOCK_AIR:
+					faces.append(Vector3(px, py, pz + 1))
+					faces.append(Vector3(px + 1, py, pz + 1))
+					faces.append(Vector3(px + 1, py, pz))
+					faces.append(Vector3(px, py, pz + 1))
+					faces.append(Vector3(px + 1, py, pz))
+					faces.append(Vector3(px, py, pz))
+				
+				# Front face (+Z)
+				if z < size_z - 1:
+					if blocks[index + size_x] == BlockTypes.BLOCK_AIR:
+						faces.append(Vector3(px, py, pz + 1))
+						faces.append(Vector3(px, py + 1, pz + 1))
+						faces.append(Vector3(px + 1, py + 1, pz + 1))
+						faces.append(Vector3(px, py, pz + 1))
+						faces.append(Vector3(px + 1, py + 1, pz + 1))
+						faces.append(Vector3(px + 1, py, pz + 1))
+				elif get_neighbor_block(x, y, z + 1) == BlockTypes.BLOCK_AIR:
+					faces.append(Vector3(px, py, pz + 1))
+					faces.append(Vector3(px, py + 1, pz + 1))
+					faces.append(Vector3(px + 1, py + 1, pz + 1))
+					faces.append(Vector3(px, py, pz + 1))
+					faces.append(Vector3(px + 1, py + 1, pz + 1))
+					faces.append(Vector3(px + 1, py, pz + 1))
+				
+				# Back face (-Z)
+				if z > 0:
+					if blocks[index - size_x] == BlockTypes.BLOCK_AIR:
+						faces.append(Vector3(px + 1, py, pz))
+						faces.append(Vector3(px + 1, py + 1, pz))
+						faces.append(Vector3(px, py + 1, pz))
+						faces.append(Vector3(px + 1, py, pz))
+						faces.append(Vector3(px, py + 1, pz))
+						faces.append(Vector3(px, py, pz))
+				elif get_neighbor_block(x, y, z - 1) == BlockTypes.BLOCK_AIR:
+					faces.append(Vector3(px + 1, py, pz))
+					faces.append(Vector3(px + 1, py + 1, pz))
+					faces.append(Vector3(px, py + 1, pz))
+					faces.append(Vector3(px + 1, py, pz))
+					faces.append(Vector3(px, py + 1, pz))
+					faces.append(Vector3(px, py, pz))
+				
+				# Right face (+X)
+				if x < size_x - 1:
+					if blocks[index + 1] == BlockTypes.BLOCK_AIR:
+						faces.append(Vector3(px + 1, py, pz + 1))
+						faces.append(Vector3(px + 1, py + 1, pz + 1))
+						faces.append(Vector3(px + 1, py + 1, pz))
+						faces.append(Vector3(px + 1, py, pz + 1))
+						faces.append(Vector3(px + 1, py + 1, pz))
+						faces.append(Vector3(px + 1, py, pz))
+				elif get_neighbor_block(x + 1, y, z) == BlockTypes.BLOCK_AIR:
+					faces.append(Vector3(px + 1, py, pz + 1))
+					faces.append(Vector3(px + 1, py + 1, pz + 1))
+					faces.append(Vector3(px + 1, py + 1, pz))
+					faces.append(Vector3(px + 1, py, pz + 1))
+					faces.append(Vector3(px + 1, py + 1, pz))
+					faces.append(Vector3(px + 1, py, pz))
+				
+				# Left face (-X)
+				if x > 0:
+					if blocks[index - 1] == BlockTypes.BLOCK_AIR:
+						faces.append(Vector3(px, py, pz))
+						faces.append(Vector3(px, py + 1, pz))
+						faces.append(Vector3(px, py + 1, pz + 1))
+						faces.append(Vector3(px, py, pz))
+						faces.append(Vector3(px, py + 1, pz + 1))
+						faces.append(Vector3(px, py, pz + 1))
+				elif get_neighbor_block(x - 1, y, z) == BlockTypes.BLOCK_AIR:
+					faces.append(Vector3(px, py, pz))
+					faces.append(Vector3(px, py + 1, pz))
+					faces.append(Vector3(px, py + 1, pz + 1))
+					faces.append(Vector3(px, py, pz))
+					faces.append(Vector3(px, py + 1, pz + 1))
+					faces.append(Vector3(px, py, pz + 1))
+	
+	if faces.size() > 0:
+		compound.set_faces(faces)
+		collider_shape.shape = compound
+	
 	cached_mesh = null
+
+
+func force_collision_update() -> void:
+	# Force immediate collision update (call after breaking blocks).
+	if collision_pending and cached_mesh != null:
+		_build_collision_deferred()
+		collision_pending = false
 
 
 func apply_mesh_data(mesh_data: Dictionary) -> void:

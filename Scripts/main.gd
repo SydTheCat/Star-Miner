@@ -11,6 +11,7 @@ var voxel_world: Node3D
 var camera: Camera3D
 var hotbar: Control
 var inventory_ui: Control
+var place_block_sound: AudioStreamPlayer
 
 # Debug UI elements.
 var debug_label: Label
@@ -20,7 +21,16 @@ const REACH_DISTANCE := 5.0
 var target_block_pos: Vector3i
 var target_normal: Vector3
 var has_target: bool = false
-var selected_block: int = BlockTypes.BLOCK_DIRT
+var selected_block: int = BlockTypes.BLOCK_AIR
+var break_cooldown: float = 0.0
+const BREAK_RATE := 0.15  # Seconds between breaks when holding
+var place_cooldown: float = 0.0
+const PLACE_RATE := 0.15  # Seconds between placements when holding
+
+# Block placement cursor.
+var placement_cursor: MeshInstance3D
+var cursor_material: StandardMaterial3D
+var block_rotation: Vector3 = Vector3.ZERO  # Rotation in degrees (x, y, z) - currently visual preview only
 
 # Day/night cycle.
 @onready var sun: DirectionalLight3D = $Sun
@@ -94,8 +104,6 @@ func _ready() -> void:
 	if hotbar:
 		hotbar.slot_selected.connect(_on_hotbar_slot_selected)
 		hotbar.item_dropped_to_hotbar.connect(_on_item_dropped_to_hotbar)
-		# Sync player inventory reference with hotbar.
-		hotbar.inventory = player.inventory
 	
 	# Create inventory UI.
 	inventory_ui = INVENTORY_UI_SCENE.instantiate()
@@ -106,6 +114,15 @@ func _ready() -> void:
 	
 	# Create cloud layer.
 	_create_clouds()
+	
+	# Create block placement sound.
+	place_block_sound = AudioStreamPlayer.new()
+	place_block_sound.stream = load("res://Assets/SoundFX/laser-weld.mp3")
+	place_block_sound.volume_db = 0.0
+	add_child(place_block_sound)
+	
+	# Create placement cursor.
+	_create_placement_cursor()
 
 
 func _on_hotbar_slot_selected(_slot_index: int, block_id: int) -> void:
@@ -131,6 +148,171 @@ func _on_item_dropped_to_hotbar(block_id: int, slot_index: int) -> void:
 	# Update the hotbar display.
 	if hotbar:
 		hotbar._update_slot_display(slot_index)
+
+
+func _create_placement_cursor() -> void:
+	# Create a cube to show the actual block that will be placed.
+	placement_cursor = MeshInstance3D.new()
+	placement_cursor.name = "PlacementCursor"
+	
+	# Create transparent material (will be updated with block texture).
+	cursor_material = StandardMaterial3D.new()
+	cursor_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	cursor_material.albedo_color = Color(1.0, 1.0, 1.0, 0.5)  # 50% transparency
+	cursor_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	cursor_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	
+	placement_cursor.visible = false
+	add_child(placement_cursor)
+
+
+func _update_placement_cursor() -> void:
+	if placement_cursor == null:
+		return
+	
+	# Only show cursor when we have a target and mouse is captured.
+	if not has_target or Input.get_mouse_mode() != Input.MOUSE_MODE_CAPTURED:
+		placement_cursor.visible = false
+		return
+	
+	# Only show if we have a valid block selected.
+	if selected_block == BlockTypes.BLOCK_AIR:
+		placement_cursor.visible = false
+		return
+	
+	# Calculate placement position.
+	var place_pos := target_block_pos + Vector3i(
+		int(round(target_normal.x)),
+		int(round(target_normal.y)),
+		int(round(target_normal.z))
+	)
+	
+	# Position cursor at the center of the block.
+	placement_cursor.global_position = Vector3(place_pos) + Vector3(0.5, 0.5, 0.5)
+	
+	# Apply rotation to cursor.
+	placement_cursor.rotation_degrees = block_rotation
+	
+	# Update mesh to show the selected block type.
+	_update_cursor_mesh(selected_block)
+	
+	placement_cursor.visible = true
+
+
+func _update_cursor_mesh(block_id: int) -> void:
+	# Build a simple cube mesh for the cursor showing the selected block type.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	
+	# Get texture manager for UVs.
+	var tex_manager = get_node_or_null("/root/BlockTextures")
+	if tex_manager == null:
+		return
+	
+	# Add all 6 faces of a 1x1x1 cube centered at origin.
+	# Top face (+Y)
+	var uv_top: Rect2 = tex_manager.get_uv_rect(block_id, "top")
+	st.set_normal(Vector3(0, 1, 0))
+	st.set_uv(Vector2(uv_top.position.x, uv_top.position.y + uv_top.size.y))
+	st.add_vertex(Vector3(-0.5, 0.5, -0.5))
+	st.set_uv(Vector2(uv_top.position.x + uv_top.size.x, uv_top.position.y + uv_top.size.y))
+	st.add_vertex(Vector3(0.5, 0.5, -0.5))
+	st.set_uv(Vector2(uv_top.position.x + uv_top.size.x, uv_top.position.y))
+	st.add_vertex(Vector3(0.5, 0.5, 0.5))
+	st.set_uv(Vector2(uv_top.position.x, uv_top.position.y + uv_top.size.y))
+	st.add_vertex(Vector3(-0.5, 0.5, -0.5))
+	st.set_uv(Vector2(uv_top.position.x + uv_top.size.x, uv_top.position.y))
+	st.add_vertex(Vector3(0.5, 0.5, 0.5))
+	st.set_uv(Vector2(uv_top.position.x, uv_top.position.y))
+	st.add_vertex(Vector3(-0.5, 0.5, 0.5))
+	
+	# Bottom face (-Y)
+	var uv_bottom: Rect2 = tex_manager.get_uv_rect(block_id, "bottom")
+	st.set_normal(Vector3(0, -1, 0))
+	st.set_uv(Vector2(uv_bottom.position.x, uv_bottom.position.y + uv_bottom.size.y))
+	st.add_vertex(Vector3(-0.5, -0.5, 0.5))
+	st.set_uv(Vector2(uv_bottom.position.x + uv_bottom.size.x, uv_bottom.position.y + uv_bottom.size.y))
+	st.add_vertex(Vector3(0.5, -0.5, 0.5))
+	st.set_uv(Vector2(uv_bottom.position.x + uv_bottom.size.x, uv_bottom.position.y))
+	st.add_vertex(Vector3(0.5, -0.5, -0.5))
+	st.set_uv(Vector2(uv_bottom.position.x, uv_bottom.position.y + uv_bottom.size.y))
+	st.add_vertex(Vector3(-0.5, -0.5, 0.5))
+	st.set_uv(Vector2(uv_bottom.position.x + uv_bottom.size.x, uv_bottom.position.y))
+	st.add_vertex(Vector3(0.5, -0.5, -0.5))
+	st.set_uv(Vector2(uv_bottom.position.x, uv_bottom.position.y))
+	st.add_vertex(Vector3(-0.5, -0.5, -0.5))
+	
+	# Side faces use "side" texture.
+	var uv_side: Rect2 = tex_manager.get_uv_rect(block_id, "side")
+	
+	# Front face (+Z)
+	st.set_normal(Vector3(0, 0, 1))
+	st.set_uv(Vector2(uv_side.position.x, uv_side.position.y + uv_side.size.y))
+	st.add_vertex(Vector3(-0.5, -0.5, 0.5))
+	st.set_uv(Vector2(uv_side.position.x, uv_side.position.y))
+	st.add_vertex(Vector3(-0.5, 0.5, 0.5))
+	st.set_uv(Vector2(uv_side.position.x + uv_side.size.x, uv_side.position.y))
+	st.add_vertex(Vector3(0.5, 0.5, 0.5))
+	st.set_uv(Vector2(uv_side.position.x, uv_side.position.y + uv_side.size.y))
+	st.add_vertex(Vector3(-0.5, -0.5, 0.5))
+	st.set_uv(Vector2(uv_side.position.x + uv_side.size.x, uv_side.position.y))
+	st.add_vertex(Vector3(0.5, 0.5, 0.5))
+	st.set_uv(Vector2(uv_side.position.x + uv_side.size.x, uv_side.position.y + uv_side.size.y))
+	st.add_vertex(Vector3(0.5, -0.5, 0.5))
+	
+	# Back face (-Z)
+	st.set_normal(Vector3(0, 0, -1))
+	st.set_uv(Vector2(uv_side.position.x + uv_side.size.x, uv_side.position.y + uv_side.size.y))
+	st.add_vertex(Vector3(0.5, -0.5, -0.5))
+	st.set_uv(Vector2(uv_side.position.x + uv_side.size.x, uv_side.position.y))
+	st.add_vertex(Vector3(0.5, 0.5, -0.5))
+	st.set_uv(Vector2(uv_side.position.x, uv_side.position.y))
+	st.add_vertex(Vector3(-0.5, 0.5, -0.5))
+	st.set_uv(Vector2(uv_side.position.x + uv_side.size.x, uv_side.position.y + uv_side.size.y))
+	st.add_vertex(Vector3(0.5, -0.5, -0.5))
+	st.set_uv(Vector2(uv_side.position.x, uv_side.position.y))
+	st.add_vertex(Vector3(-0.5, 0.5, -0.5))
+	st.set_uv(Vector2(uv_side.position.x, uv_side.position.y + uv_side.size.y))
+	st.add_vertex(Vector3(-0.5, -0.5, -0.5))
+	
+	# Right face (+X)
+	st.set_normal(Vector3(1, 0, 0))
+	st.set_uv(Vector2(uv_side.position.x, uv_side.position.y + uv_side.size.y))
+	st.add_vertex(Vector3(0.5, -0.5, 0.5))
+	st.set_uv(Vector2(uv_side.position.x, uv_side.position.y))
+	st.add_vertex(Vector3(0.5, 0.5, 0.5))
+	st.set_uv(Vector2(uv_side.position.x + uv_side.size.x, uv_side.position.y))
+	st.add_vertex(Vector3(0.5, 0.5, -0.5))
+	st.set_uv(Vector2(uv_side.position.x, uv_side.position.y + uv_side.size.y))
+	st.add_vertex(Vector3(0.5, -0.5, 0.5))
+	st.set_uv(Vector2(uv_side.position.x + uv_side.size.x, uv_side.position.y))
+	st.add_vertex(Vector3(0.5, 0.5, -0.5))
+	st.set_uv(Vector2(uv_side.position.x + uv_side.size.x, uv_side.position.y + uv_side.size.y))
+	st.add_vertex(Vector3(0.5, -0.5, -0.5))
+	
+	# Left face (-X)
+	st.set_normal(Vector3(-1, 0, 0))
+	st.set_uv(Vector2(uv_side.position.x, uv_side.position.y + uv_side.size.y))
+	st.add_vertex(Vector3(-0.5, -0.5, -0.5))
+	st.set_uv(Vector2(uv_side.position.x, uv_side.position.y))
+	st.add_vertex(Vector3(-0.5, 0.5, -0.5))
+	st.set_uv(Vector2(uv_side.position.x + uv_side.size.x, uv_side.position.y))
+	st.add_vertex(Vector3(-0.5, 0.5, 0.5))
+	st.set_uv(Vector2(uv_side.position.x, uv_side.position.y + uv_side.size.y))
+	st.add_vertex(Vector3(-0.5, -0.5, -0.5))
+	st.set_uv(Vector2(uv_side.position.x + uv_side.size.x, uv_side.position.y))
+	st.add_vertex(Vector3(-0.5, 0.5, 0.5))
+	st.set_uv(Vector2(uv_side.position.x + uv_side.size.x, uv_side.position.y + uv_side.size.y))
+	st.add_vertex(Vector3(-0.5, -0.5, 0.5))
+	
+	# Generate mesh.
+	var mesh := st.commit()
+	placement_cursor.mesh = mesh
+	
+	# Apply material with texture atlas and 50% transparency.
+	cursor_material.albedo_texture = tex_manager.get_atlas()
+	cursor_material.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+	placement_cursor.material_override = cursor_material
 
 
 func _create_clouds() -> void:
@@ -186,7 +368,10 @@ func _process(delta: float) -> void:
 	_update_day_night_cycle(delta)
 	_update_debug_ui()
 	_update_target_block()
+	_update_placement_cursor()
 	_update_clouds()
+	_handle_continuous_breaking(delta)
+	_handle_continuous_placement(delta)
 
 
 func _update_day_night_cycle(delta: float) -> void:
@@ -427,12 +612,26 @@ func _unhandled_input(event: InputEvent) -> void:
 		player.global_transform.origin = Vector3(8.0, 40.0, 8.0)
 		player.velocity = Vector3.ZERO
 	
-	# Block interaction (only when mouse captured).
-	if Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED and has_target:
-		if event.is_action_pressed("break_block"):
-			_break_block()
-		elif event.is_action_pressed("place_block"):
-			_place_block()
+	# Block rotation with Ctrl+WASD.
+	if Input.is_key_pressed(KEY_CTRL):
+		if event.is_action_pressed("move_forward"):  # W - rotate around X axis
+			block_rotation.x += 90.0
+			if block_rotation.x >= 360.0:
+				block_rotation.x = 0.0
+		elif event.is_action_pressed("move_backward"):  # S - rotate around X axis (opposite)
+			block_rotation.x -= 90.0
+			if block_rotation.x < 0.0:
+				block_rotation.x = 270.0
+		elif event.is_action_pressed("move_left"):  # A - rotate around Y axis
+			block_rotation.y += 90.0
+			if block_rotation.y >= 360.0:
+				block_rotation.y = 0.0
+		elif event.is_action_pressed("move_right"):  # D - rotate around Y axis (opposite)
+			block_rotation.y -= 90.0
+			if block_rotation.y < 0.0:
+				block_rotation.y = 270.0
+	
+	# Block placement now handled in _handle_continuous_placement
 
 
 func _update_target_block() -> void:
@@ -466,6 +665,32 @@ func _update_target_block() -> void:
 	has_target = true
 
 
+func _handle_continuous_breaking(delta: float) -> void:
+	# Decrease cooldown.
+	if break_cooldown > 0.0:
+		break_cooldown -= delta
+	
+	# Check for continuous breaking while holding the button.
+	if Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED and has_target:
+		if Input.is_action_pressed("break_block") and break_cooldown <= 0.0:
+			_break_block()
+			_update_target_block()  # Refresh target after breaking.
+			break_cooldown = BREAK_RATE
+
+
+func _handle_continuous_placement(delta: float) -> void:
+	# Decrease cooldown.
+	if place_cooldown > 0.0:
+		place_cooldown -= delta
+	
+	# Check for continuous placement while holding the button.
+	if Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED and has_target:
+		if Input.is_action_pressed("place_block") and place_cooldown <= 0.0:
+			_place_block()
+			_update_target_block()  # Refresh target after placing.
+			place_cooldown = PLACE_RATE
+
+
 func _break_block() -> void:
 	if voxel_world == null:
 		return
@@ -482,9 +707,14 @@ func _break_block() -> void:
 	# Set block to air.
 	voxel_world.set_block_global(target_block_pos.x, target_block_pos.y, target_block_pos.z, BlockTypes.BLOCK_AIR)
 	
+	# Convert grass to dirt when collected.
+	var drop_id := block_id
+	if block_id == BlockTypes.BLOCK_GRASS:
+		drop_id = BlockTypes.BLOCK_DIRT
+	
 	# Add to inventory.
 	if hotbar:
-		hotbar.add_block(block_id)
+		hotbar.add_block(drop_id)
 
 
 func _spawn_break_particles(pos: Vector3, block_id: int) -> void:
@@ -538,3 +768,8 @@ func _place_block() -> void:
 	# Remove from inventory and place the block.
 	hotbar.remove_block(selected_block)
 	voxel_world.set_block_global(place_pos.x, place_pos.y, place_pos.z, selected_block)
+	
+	# Play placement sound (short burst).
+	if place_block_sound:
+		place_block_sound.play()
+		get_tree().create_timer(0.15).timeout.connect(func(): place_block_sound.stop())

@@ -37,8 +37,8 @@ const MAX_CHUNKS_TO_START_PER_FRAME := 4
 # Max chunks to finalize (create mesh) per frame.
 const MAX_CHUNKS_TO_FINALIZE_PER_FRAME := 3
 
-# Deterministic world seed.
-var world_seed: int = 12345
+# Random world seed (generated on start).
+var world_seed: int = randi()
 
 # Noise generator for terrain heightmap.
 var noise: FastNoiseLite
@@ -46,9 +46,20 @@ var noise: FastNoiseLite
 # Reference to player (set by Main).
 var player: Node3D = null
 
+# Tree fall sound.
+var tree_fall_sound: AudioStreamPlayer
+
+# Dirt to grass conversion tracking.
+var dirt_blocks_timer: Dictionary = {}  # Vector3i -> float (time elapsed)
+const DIRT_TO_GRASS_TIME := 10.0  # Seconds before dirt becomes grass
+var dirt_update_timer: float = 0.0
+const DIRT_UPDATE_INTERVAL := 0.5  # Only check every 0.5 seconds
+
 
 func _ready() -> void:
 	_setup_noise()
+	_setup_sounds()
+	set_process(true)
 
 
 func _setup_noise() -> void:
@@ -61,12 +72,54 @@ func _setup_noise() -> void:
 	noise.fractal_gain = 0.5
 
 
-func _process(_delta: float) -> void:
+func _setup_sounds() -> void:
+	tree_fall_sound = AudioStreamPlayer.new()
+	tree_fall_sound.stream = load("res://Assets/SoundFX/breaking-wood.mp3")
+	tree_fall_sound.volume_db = 0.0
+	add_child(tree_fall_sound)
+
+
+func _process(delta: float) -> void:
 	if player == null:
 		return
 	_update_chunks_around_player()
 	_start_chunk_generation()
 	_finalize_ready_chunks()
+	_update_dirt_to_grass_conversion(delta)
+
+
+func _update_dirt_to_grass_conversion(delta: float) -> void:
+	# Only update every DIRT_UPDATE_INTERVAL seconds to avoid performance issues.
+	dirt_update_timer += delta
+	if dirt_update_timer < DIRT_UPDATE_INTERVAL:
+		return
+	
+	var elapsed := dirt_update_timer
+	dirt_update_timer = 0.0
+	
+	# Update timers for dirt blocks and convert to grass when ready.
+	var blocks_to_convert: Array[Vector3i] = []
+	
+	for pos in dirt_blocks_timer.keys():
+		dirt_blocks_timer[pos] += elapsed
+		
+		if dirt_blocks_timer[pos] >= DIRT_TO_GRASS_TIME:
+			# Check if block is still dirt and has air above.
+			var block := get_block_global(pos.x, pos.y, pos.z)
+			if block == BlockTypes.BLOCK_DIRT:
+				var above := get_block_global(pos.x, pos.y + 1, pos.z)
+				if above == BlockTypes.BLOCK_AIR:
+					blocks_to_convert.append(pos)
+			else:
+				# Block changed, remove from tracking.
+				blocks_to_convert.append(pos)
+	
+	# Convert blocks and remove from tracking.
+	for pos in blocks_to_convert:
+		var block := get_block_global(pos.x, pos.y, pos.z)
+		if block == BlockTypes.BLOCK_DIRT:
+			set_block_global(pos.x, pos.y, pos.z, BlockTypes.BLOCK_GRASS)
+		dirt_blocks_timer.erase(pos)
 
 
 func _update_chunks_around_player() -> void:
@@ -478,6 +531,51 @@ func _finalize_chunk(chunk_coords: Vector3i, blocks: PackedInt32Array, mesh_data
 	call_deferred("_update_neighbor_meshes", chunk_coords)
 
 
+func _scan_all_loaded_chunks() -> void:
+	# Scan all currently loaded chunks for exposed dirt blocks.
+	print("Scanning ", chunks.size(), " loaded chunks for exposed dirt blocks...")
+	var total_found := 0
+	
+	for coords in chunks.keys():
+		var chunk = chunks[coords]
+		if chunk and chunk.blocks:
+			_scan_chunk_for_dirt(coords, chunk.blocks)
+			# Count how many we found.
+			for pos in dirt_blocks_timer.keys():
+				if pos.x >= coords.x * CHUNK_SIZE_X and pos.x < (coords.x + 1) * CHUNK_SIZE_X:
+					if pos.z >= coords.z * CHUNK_SIZE_Z and pos.z < (coords.z + 1) * CHUNK_SIZE_Z:
+						total_found += 1
+	
+	print("Total exposed dirt blocks found: ", total_found)
+
+
+func _scan_chunk_for_dirt(chunk_coords: Vector3i, blocks: PackedInt32Array) -> void:
+	# Scan chunk for exposed dirt blocks and add to tracking.
+	var base_x := chunk_coords.x * CHUNK_SIZE_X
+	var base_z := chunk_coords.z * CHUNK_SIZE_Z
+	var size_xz := CHUNK_SIZE_X * CHUNK_SIZE_Z
+	var found_count := 0
+	
+	for y in CHUNK_SIZE_Y:
+		for z in CHUNK_SIZE_Z:
+			for x in CHUNK_SIZE_X:
+				var index := x + z * CHUNK_SIZE_X + y * size_xz
+				var block_id: int = blocks[index]
+				
+				if block_id == BlockTypes.BLOCK_DIRT:
+					# Check if it has air above.
+					var world_x := base_x + x
+					var world_z := base_z + z
+					var above := get_block_global(world_x, y + 1, world_z)
+					if above == BlockTypes.BLOCK_AIR:
+						var pos := Vector3i(world_x, y, world_z)
+						dirt_blocks_timer[pos] = 0.0
+						found_count += 1
+	
+	if found_count > 0:
+		print("Chunk ", chunk_coords, " found ", found_count, " exposed dirt blocks")
+
+
 func _world_to_chunk_coords(world_pos: Vector3) -> Vector3i:
 	# Convert world position to chunk coordinates.
 	var cx := floori(world_pos.x / float(CHUNK_SIZE_X))
@@ -588,6 +686,25 @@ func set_block_global(world_x: int, world_y: int, world_z: int, block_id: int) -
 
 	# Set the block.
 	chunk.set_block(local_x, world_y, local_z, block_id)
+	
+	# Track dirt blocks for grass conversion only when breaking grass above them.
+	var pos := Vector3i(world_x, world_y, world_z)
+	if block_id == BlockTypes.BLOCK_AIR and old_block == BlockTypes.BLOCK_GRASS:
+		# Grass was broken - check if there's dirt below.
+		var below := get_block_global(world_x, world_y - 1, world_z)
+		if below == BlockTypes.BLOCK_DIRT:
+			var below_pos := Vector3i(world_x, world_y - 1, world_z)
+			dirt_blocks_timer[below_pos] = 0.0  # Start timer for exposed dirt.
+	elif block_id == BlockTypes.BLOCK_DIRT:
+		# Dirt placed - check if it has air above.
+		var above := get_block_global(world_x, world_y + 1, world_z)
+		if above == BlockTypes.BLOCK_AIR:
+			dirt_blocks_timer[pos] = 0.0  # Start timer.
+	elif block_id != BlockTypes.BLOCK_AIR:
+		# Block placed - stop tracking dirt at this position or below.
+		dirt_blocks_timer.erase(pos)
+		var below_pos := Vector3i(world_x, world_y - 1, world_z)
+		dirt_blocks_timer.erase(below_pos)
 
 	# If we broke a tree block, check for unsupported blocks above.
 	if breaking_tree_block:
@@ -595,6 +712,7 @@ func set_block_global(world_x: int, world_y: int, world_z: int, block_id: int) -
 
 	# Rebuild this chunk's mesh.
 	chunk.update_mesh()
+	chunk.force_collision_update()
 
 	# If block is at chunk edge, also update neighbor chunk.
 	if local_x == 0:
@@ -611,6 +729,7 @@ func _update_chunk_mesh_at(coords: Vector3i) -> void:
 	if chunks.has(coords):
 		var chunk: Node3D = chunks[coords]
 		chunk.update_mesh()
+		chunk.force_collision_update()
 
 
 func _check_falling_blocks(broken_x: int, broken_y: int, broken_z: int) -> void:
@@ -672,7 +791,11 @@ func _check_falling_blocks(broken_x: int, broken_y: int, broken_z: int) -> void:
 			break
 	
 	# If not supported, make all tree blocks fall.
-	if not is_supported:
+	if not is_supported and tree_blocks.size() > 0:
+		# Play tree fall sound once (only for actual trees, not single stray blocks).
+		if tree_blocks.size() >= 3 and tree_fall_sound and not tree_fall_sound.playing:
+			tree_fall_sound.play()
+		
 		var affected_chunks: Dictionary = {}
 		for pos in tree_blocks:
 			var block := get_block_global(pos.x, pos.y, pos.z)

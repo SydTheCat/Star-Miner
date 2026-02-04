@@ -8,9 +8,17 @@ var block_textures: Node = null
 
 const SLOT_COUNT := 10
 
+@export_group("Stack Sizes")
+@export var default_stack_size: int = 64
+@export var dirt_stack_size: int = 100
+@export var wood_stack_size: int = 100
+@export var leaves_stack_size: int = 100
+@export var stone_stack_size: int = 64
+@export var grass_stack_size: int = 64
+
 var selected_slot: int = 0
 var slots: Array[int] = []  # Block type in each slot
-var inventory: Dictionary = {}  # block_id -> count
+var slot_counts: Array[int] = []  # Count in each slot
 var slot_nodes: Array[Panel] = []
 
 @onready var slot_container: HBoxContainer = $SlotContainer
@@ -27,8 +35,10 @@ func _ready() -> void:
 	
 	# Initialize slots as empty.
 	slots.resize(SLOT_COUNT)
+	slot_counts.resize(SLOT_COUNT)
 	for i in SLOT_COUNT:
 		slots[i] = BlockTypes.BLOCK_AIR
+		slot_counts[i] = 0
 	
 	_create_slot_ui()
 	_update_selection()
@@ -224,7 +234,7 @@ func _update_slot_display(index: int) -> void:
 		_update_block_texture(block_texture, block_id)
 	
 	if count_label:
-		var count: int = inventory.get(block_id, 0)
+		var count: int = slot_counts[index]
 		if block_id != BlockTypes.BLOCK_AIR and count > 0:
 			count_label.text = str(count)
 		else:
@@ -250,66 +260,93 @@ func _update_block_texture(tex_rect: TextureRect, block_id: int) -> void:
 	tex_rect.texture = tex
 
 
+func get_max_stack(block_id: int) -> int:
+	# Return max stack size for a block type.
+	match block_id:
+		BlockTypes.BLOCK_DIRT:
+			return dirt_stack_size
+		BlockTypes.BLOCK_WOOD:
+			return wood_stack_size
+		BlockTypes.BLOCK_LEAVES:
+			return leaves_stack_size
+		BlockTypes.BLOCK_STONE:
+			return stone_stack_size
+		BlockTypes.BLOCK_GRASS:
+			return grass_stack_size
+		_:
+			return default_stack_size
+
+
 func add_block(block_id: int, amount: int = 1) -> void:
-	# Add block to inventory.
+	# Add block to inventory, with overflow to new slots.
 	if block_id == BlockTypes.BLOCK_AIR:
 		return
 	
-	if not inventory.has(block_id):
-		inventory[block_id] = 0
-	inventory[block_id] += amount
+	var max_stack := get_max_stack(block_id)
+	var remaining := amount
 	
-	# Find if block is already in a slot.
-	var existing_slot := -1
+	# First, try to add to existing slots with this block type.
 	for i in SLOT_COUNT:
-		if slots[i] == block_id:
-			existing_slot = i
-			break
+		if slots[i] == block_id and remaining > 0:
+			var can_add := max_stack - slot_counts[i]
+			if can_add > 0:
+				var to_add := mini(remaining, can_add)
+				slot_counts[i] += to_add
+				remaining -= to_add
+				_update_slot_display(i)
 	
-	# If not in any slot, find first empty slot.
-	if existing_slot == -1:
+	# If still have remaining, find empty slots.
+	while remaining > 0:
+		var empty_slot := -1
 		for i in SLOT_COUNT:
 			if slots[i] == BlockTypes.BLOCK_AIR:
-				slots[i] = block_id
-				existing_slot = i
+				empty_slot = i
 				break
-	
-	# Update display.
-	if existing_slot >= 0:
-		_update_slot_display(existing_slot)
+		
+		if empty_slot == -1:
+			break  # No more empty slots.
+		
+		# Add to empty slot.
+		slots[empty_slot] = block_id
+		var to_add := mini(remaining, max_stack)
+		slot_counts[empty_slot] = to_add
+		remaining -= to_add
+		_update_slot_display(empty_slot)
 
 
 func remove_block(block_id: int, amount: int = 1) -> bool:
-	# Remove block from inventory. Returns true if successful.
+	# Remove block from selected slot. Returns true if successful.
 	if block_id == BlockTypes.BLOCK_AIR:
 		return false
 	
-	var count: int = inventory.get(block_id, 0)
-	if count < amount:
-		return false
+	# Remove from selected slot first.
+	if slots[selected_slot] == block_id and slot_counts[selected_slot] >= amount:
+		slot_counts[selected_slot] -= amount
+		if slot_counts[selected_slot] <= 0:
+			slots[selected_slot] = BlockTypes.BLOCK_AIR
+			slot_counts[selected_slot] = 0
+		_update_slot_display(selected_slot)
+		return true
 	
-	inventory[block_id] = count - amount
-	
-	# If count is now 0, clear the slot.
-	if inventory[block_id] <= 0:
-		inventory.erase(block_id)
-		for i in SLOT_COUNT:
-			if slots[i] == block_id:
+	# Otherwise find any slot with this block.
+	for i in SLOT_COUNT:
+		if slots[i] == block_id and slot_counts[i] >= amount:
+			slot_counts[i] -= amount
+			if slot_counts[i] <= 0:
 				slots[i] = BlockTypes.BLOCK_AIR
-				_update_slot_display(i)
-				break
-	else:
-		# Just update the count display.
-		for i in SLOT_COUNT:
-			if slots[i] == block_id:
-				_update_slot_display(i)
-				break
+				slot_counts[i] = 0
+			_update_slot_display(i)
+			return true
 	
-	return true
+	return false
 
 
 func get_block_count(block_id: int) -> int:
-	return inventory.get(block_id, 0)
+	var total := 0
+	for i in SLOT_COUNT:
+		if slots[i] == block_id:
+			total += slot_counts[i]
+	return total
 
 
 func can_place_block() -> bool:
@@ -317,7 +354,7 @@ func can_place_block() -> bool:
 	var block_id: int = slots[selected_slot]
 	if block_id == BlockTypes.BLOCK_AIR:
 		return false
-	return inventory.get(block_id, 0) > 0
+	return slot_counts[selected_slot] > 0
 
 
 func _get_block_color(block_id: int) -> Color:

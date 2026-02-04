@@ -18,17 +18,26 @@ var pitch: float = 0.0
 # Inventory: Dictionary of block_type -> count.
 var inventory: Dictionary = {}
 
+# Footsteps sound.
+var footsteps_sound: AudioStreamPlayer
+var is_walking: bool = false
+
 @onready var head: Node3D = $Head
 @onready var camera: Camera3D = $Head/Camera3D
 
 func _ready() -> void:
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+	_setup_footsteps_sound()
 
 
 func _physics_process(delta: float) -> void:
+	# Don't allow movement when Ctrl is held (for block rotation).
+	var allow_movement := not Input.is_key_pressed(KEY_CTRL)
+	
 	var input_dir := Vector2.ZERO
-	input_dir.x = Input.get_action_strength("move_right") - Input.get_action_strength("move_left")
-	input_dir.y = Input.get_action_strength("move_back") - Input.get_action_strength("move_forward")
+	if allow_movement:
+		input_dir.x = Input.get_action_strength("move_right") - Input.get_action_strength("move_left")
+		input_dir.y = Input.get_action_strength("move_back") - Input.get_action_strength("move_forward")
 
 	var direction := Vector3.ZERO
 	if input_dir.length() > 0.0:
@@ -55,6 +64,14 @@ func _physics_process(delta: float) -> void:
 		velocity.y -= GRAVITY * delta
 
 	move_and_slide()
+	
+	# Handle footsteps sound.
+	var horizontal_speed := Vector2(velocity.x, velocity.z).length()
+	var should_play := is_on_floor() and horizontal_speed > 0.5
+	if should_play and not footsteps_sound.playing:
+		footsteps_sound.play()
+	elif not should_play and footsteps_sound.playing:
+		footsteps_sound.stop()
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -93,3 +110,10 @@ func remove_from_inventory(block_type: int, count: int = 1) -> bool:
 	if inventory[block_type] <= 0:
 		inventory.erase(block_type)
 	return true
+
+
+func _setup_footsteps_sound() -> void:
+	footsteps_sound = AudioStreamPlayer.new()
+	footsteps_sound.stream = load("res://Assets/SoundFX/footsteps.mp3")
+	footsteps_sound.volume_db = -5.0
+	add_child(footsteps_sound)
