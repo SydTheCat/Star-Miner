@@ -187,5 +187,3 @@ func _play_pickup_sound() -> void:
 	get_tree().current_scene.add_child(sound)
 	sound.play()
 	sound.finished.connect(sound.queue_free)
-
-

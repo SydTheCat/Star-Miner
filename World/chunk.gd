@@ -16,6 +16,9 @@ var chunk_coords: Vector3i = Vector3i.ZERO
 # Can be set directly by VoxelWorld with pre-generated data.
 var blocks: PackedInt32Array
 
+# Block rotation storage (encoded as: y_rot * 4 + x_rot, where each is 0-3 for 0/90/180/270 degrees).
+var block_rotations: PackedByteArray
+
 # Reference to VoxelWorld for cross-chunk neighbor queries.
 var voxel_world: Node3D = null
 
@@ -51,8 +54,11 @@ func _allocate_block_storage() -> void:
 	var total_blocks := CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z
 	blocks = PackedInt32Array()
 	blocks.resize(total_blocks)
+	block_rotations = PackedByteArray()
+	block_rotations.resize(total_blocks)
 	for i in total_blocks:
 		blocks[i] = BlockTypes.BLOCK_AIR
+		block_rotations[i] = 0
 
 
 func _get_index(x: int, y: int, z: int) -> int:
@@ -68,11 +74,22 @@ func is_inside(x: int, y: int, z: int) -> bool:
 	)
 
 
-func set_block(x: int, y: int, z: int, block_id: int) -> void:
+func set_block(x: int, y: int, z: int, block_id: int, rotation: int = 0) -> void:
 	if not is_inside(x, y, z):
 		return
 	var index := _get_index(x, y, z)
 	blocks[index] = block_id
+	if block_rotations.size() > index:
+		block_rotations[index] = rotation
+
+
+func get_block_rotation(x: int, y: int, z: int) -> int:
+	if not is_inside(x, y, z):
+		return 0
+	var index := _get_index(x, y, z)
+	if block_rotations.size() > index:
+		return block_rotations[index]
+	return 0
 
 
 func get_block(x: int, y: int, z: int) -> int:
@@ -129,6 +146,43 @@ func _block_color(block_id: int) -> Color:
 			return Color(1, 1, 1)
 
 
+func _get_rotated_faces(x_rot: int, y_rot: int) -> Dictionary:
+	# Returns which texture type ("top", "bottom", "side") goes on each world face
+	# based on block rotation. x_rot and y_rot are 0-3 (0/90/180/270 degrees).
+	
+	# Default (no rotation): top=top, bottom=bottom, sides=side
+	var result := {
+		"top": "top",
+		"bottom": "bottom",
+		"north": "side",
+		"south": "side",
+		"east": "side",
+		"west": "side"
+	}
+	
+	# Apply X rotation (tilts block forward/backward).
+	# x_rot: 0=0°, 1=90°, 2=180°, 3=270°
+	if x_rot == 1:  # 90° forward tilt - top faces south, bottom faces north
+		result["top"] = "side"
+		result["bottom"] = "side"
+		result["north"] = "top"
+		result["south"] = "bottom"
+	elif x_rot == 2:  # 180° - upside down
+		result["top"] = "bottom"
+		result["bottom"] = "top"
+	elif x_rot == 3:  # 270° - top faces north, bottom faces south
+		result["top"] = "side"
+		result["bottom"] = "side"
+		result["north"] = "bottom"
+		result["south"] = "top"
+	
+	# Y rotation only affects horizontal face assignment (which side texture goes where).
+	# For blocks with uniform side textures, this doesn't visually change anything.
+	# But the face mapping is still correct for the rotation.
+	
+	return result
+
+
 # Build a mesh from voxel data, only adding faces exposed to air.
 func update_mesh() -> void:
 	var st := SurfaceTool.new()
@@ -147,6 +201,10 @@ func update_mesh() -> void:
 	var size_z := CHUNK_SIZE_Z
 	var size_xz := size_x * size_z
 
+	# Pre-cache rotation data.
+	var local_rotations := block_rotations
+	var has_rotations := local_rotations.size() > 0
+
 	for y in size_y:
 		var y_offset := y * size_xz
 		for z in size_z:
@@ -157,50 +215,58 @@ func update_mesh() -> void:
 				if block_id == BlockTypes.BLOCK_AIR:
 					continue
 
+				# Get rotation for this block (encoded as y_rot * 4 + x_rot).
+				var rotation: int = local_rotations[index] if has_rotations else 0
+				var x_rot: int = rotation % 4  # 0-3 for 0/90/180/270 degrees
+				var y_rot: int = rotation / 4  # 0-3 for 0/90/180/270 degrees
+				
+				# Get rotated face types based on rotation.
+				var faces := _get_rotated_faces(x_rot, y_rot)
+
 				# Neighbor checks – add face only if neighbor is air.
 				# Inline neighbor checks for interior blocks (faster).
 				
-				# -X (west) - side
+				# -X (west)
 				if x > 0:
 					if local_blocks[index - 1] == BlockTypes.BLOCK_AIR:
-						_add_face_x_uv(st, x, y, z, false, tex_manager.get_uv_rect(block_id, "side"))
+						_add_face_x_uv(st, x, y, z, false, tex_manager.get_uv_rect(block_id, faces["west"]))
 				elif get_neighbor_block(x - 1, y, z) == BlockTypes.BLOCK_AIR:
-					_add_face_x_uv(st, x, y, z, false, tex_manager.get_uv_rect(block_id, "side"))
+					_add_face_x_uv(st, x, y, z, false, tex_manager.get_uv_rect(block_id, faces["west"]))
 				
-				# +X (east) - side
+				# +X (east)
 				if x < size_x - 1:
 					if local_blocks[index + 1] == BlockTypes.BLOCK_AIR:
-						_add_face_x_uv(st, x, y, z, true, tex_manager.get_uv_rect(block_id, "side"))
+						_add_face_x_uv(st, x, y, z, true, tex_manager.get_uv_rect(block_id, faces["east"]))
 				elif get_neighbor_block(x + 1, y, z) == BlockTypes.BLOCK_AIR:
-					_add_face_x_uv(st, x, y, z, true, tex_manager.get_uv_rect(block_id, "side"))
+					_add_face_x_uv(st, x, y, z, true, tex_manager.get_uv_rect(block_id, faces["east"]))
 
-				# -Y (down) - bottom
+				# -Y (down)
 				if y > 0:
 					if local_blocks[index - size_xz] == BlockTypes.BLOCK_AIR:
-						_add_face_y_uv(st, x, y, z, false, tex_manager.get_uv_rect(block_id, "bottom"))
+						_add_face_y_uv(st, x, y, z, false, tex_manager.get_uv_rect(block_id, faces["bottom"]))
 				elif get_neighbor_block(x, y - 1, z) == BlockTypes.BLOCK_AIR:
-					_add_face_y_uv(st, x, y, z, false, tex_manager.get_uv_rect(block_id, "bottom"))
+					_add_face_y_uv(st, x, y, z, false, tex_manager.get_uv_rect(block_id, faces["bottom"]))
 				
-				# +Y (up) - top
+				# +Y (up)
 				if y < size_y - 1:
 					if local_blocks[index + size_xz] == BlockTypes.BLOCK_AIR:
-						_add_face_y_uv(st, x, y, z, true, tex_manager.get_uv_rect(block_id, "top"))
+						_add_face_y_uv(st, x, y, z, true, tex_manager.get_uv_rect(block_id, faces["top"]))
 				elif get_neighbor_block(x, y + 1, z) == BlockTypes.BLOCK_AIR:
-					_add_face_y_uv(st, x, y, z, true, tex_manager.get_uv_rect(block_id, "top"))
+					_add_face_y_uv(st, x, y, z, true, tex_manager.get_uv_rect(block_id, faces["top"]))
 
-				# -Z (north) - side
+				# -Z (north)
 				if z > 0:
 					if local_blocks[index - size_x] == BlockTypes.BLOCK_AIR:
-						_add_face_z_uv(st, x, y, z, false, tex_manager.get_uv_rect(block_id, "side"))
+						_add_face_z_uv(st, x, y, z, false, tex_manager.get_uv_rect(block_id, faces["north"]))
 				elif get_neighbor_block(x, y, z - 1) == BlockTypes.BLOCK_AIR:
-					_add_face_z_uv(st, x, y, z, false, tex_manager.get_uv_rect(block_id, "side"))
+					_add_face_z_uv(st, x, y, z, false, tex_manager.get_uv_rect(block_id, faces["north"]))
 				
-				# +Z (south) - side
+				# +Z (south)
 				if z < size_z - 1:
 					if local_blocks[index + size_x] == BlockTypes.BLOCK_AIR:
-						_add_face_z_uv(st, x, y, z, true, tex_manager.get_uv_rect(block_id, "side"))
+						_add_face_z_uv(st, x, y, z, true, tex_manager.get_uv_rect(block_id, faces["south"]))
 				elif get_neighbor_block(x, y, z + 1) == BlockTypes.BLOCK_AIR:
-					_add_face_z_uv(st, x, y, z, true, tex_manager.get_uv_rect(block_id, "side"))
+					_add_face_z_uv(st, x, y, z, true, tex_manager.get_uv_rect(block_id, faces["south"]))
 
 	# Index the mesh and generate proper normals.
 	st.index()

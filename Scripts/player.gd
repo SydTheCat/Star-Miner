@@ -22,12 +22,17 @@ var inventory: Dictionary = {}
 var footsteps_sound: AudioStreamPlayer
 var is_walking: bool = false
 
+# Flashlight (headlamp).
+var flashlight: SpotLight3D
+var flashlight_on: bool = false
+
 @onready var head: Node3D = $Head
 @onready var camera: Camera3D = $Head/Camera3D
 
 func _ready() -> void:
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 	_setup_footsteps_sound()
+	_setup_flashlight()
 
 
 func _physics_process(delta: float) -> void:
@@ -88,6 +93,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
 		else:
 			Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+	
+	# Toggle flashlight with T key.
+	if event is InputEventKey and event.pressed and event.keycode == KEY_T:
+		toggle_flashlight()
 
 
 func add_to_inventory(block_type: int, count: int = 1) -> void:
@@ -117,3 +126,28 @@ func _setup_footsteps_sound() -> void:
 	footsteps_sound.stream = load("res://Assets/SoundFX/footsteps.mp3")
 	footsteps_sound.volume_db = -5.0
 	add_child(footsteps_sound)
+
+
+func _setup_flashlight() -> void:
+	flashlight = SpotLight3D.new()
+	flashlight.name = "Flashlight"
+	
+	# Light properties.
+	flashlight.light_color = Color(1.0, 0.95, 0.85)  # Warm white.
+	flashlight.light_energy = 3.0
+	flashlight.light_indirect_energy = 0.5
+	flashlight.spot_range = 30.0
+	flashlight.spot_angle = 35.0
+	flashlight.spot_angle_attenuation = 0.8
+	flashlight.shadow_enabled = true
+	flashlight.shadow_bias = 0.1
+	
+	# Attach to camera so it follows head movement.
+	flashlight.visible = flashlight_on
+	camera.add_child(flashlight)
+
+
+func toggle_flashlight() -> void:
+	flashlight_on = not flashlight_on
+	if flashlight:
+		flashlight.visible = flashlight_on

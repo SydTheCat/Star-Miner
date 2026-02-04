@@ -767,7 +767,13 @@ func _place_block() -> void:
 	
 	# Remove from inventory and place the block.
 	hotbar.remove_block(selected_block)
-	voxel_world.set_block_global(place_pos.x, place_pos.y, place_pos.z, selected_block)
+	
+	# Encode rotation: y_rot * 4 + x_rot, where each is 0-3 for 0/90/180/270 degrees.
+	var x_rot := int(block_rotation.x / 90.0) % 4
+	var y_rot := int(block_rotation.y / 90.0) % 4
+	var encoded_rotation := y_rot * 4 + x_rot
+	
+	voxel_world.set_block_global(place_pos.x, place_pos.y, place_pos.z, selected_block, encoded_rotation)
 	
 	# Play placement sound (short burst).
 	if place_block_sound:

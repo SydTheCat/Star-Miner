@@ -661,7 +661,7 @@ func get_block_global(world_x: int, world_y: int, world_z: int) -> int:
 	return chunk.get_block(local_x, world_y, local_z)
 
 
-func set_block_global(world_x: int, world_y: int, world_z: int, block_id: int) -> void:
+func set_block_global(world_x: int, world_y: int, world_z: int, block_id: int, rotation: int = 0) -> void:
 	# Set block at world coordinates and update affected chunk meshes.
 	if world_y < 0 or world_y >= CHUNK_SIZE_Y:
 		return
@@ -684,8 +684,8 @@ func set_block_global(world_x: int, world_y: int, world_z: int, block_id: int) -
 	var breaking_tree_block := (block_id == BlockTypes.BLOCK_AIR and 
 		(old_block == BlockTypes.BLOCK_WOOD or old_block == BlockTypes.BLOCK_LEAVES))
 
-	# Set the block.
-	chunk.set_block(local_x, world_y, local_z, block_id)
+	# Set the block with rotation.
+	chunk.set_block(local_x, world_y, local_z, block_id, rotation)
 	
 	# Track dirt blocks for grass conversion only when breaking grass above them.
 	var pos := Vector3i(world_x, world_y, world_z)
