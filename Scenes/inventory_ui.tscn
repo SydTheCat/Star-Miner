@@ -30,10 +30,10 @@ anchor_left = 0.5
 anchor_top = 0.5
 anchor_right = 0.5
 anchor_bottom = 0.5
-offset_left = -400.0
-offset_top = -280.0
-offset_right = 400.0
-offset_bottom = 280.0
+offset_left = -340.0
+offset_top = -210.0
+offset_right = 340.0
+offset_bottom = 210.0
 grow_horizontal = 2
 grow_vertical = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
@@ -44,9 +44,9 @@ anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 offset_left = 16.0
-offset_top = 16.0
+offset_top = 12.0
 offset_right = -16.0
-offset_bottom = -16.0
+offset_bottom = -12.0
 
 [node name="TitleBar" type="HBoxContainer" parent="Panel/VBoxContainer"]
 layout_mode = 2
@@ -55,10 +55,10 @@ layout_mode = 2
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Inventory"
-theme_override_font_sizes/font_size = 24
+theme_override_font_sizes/font_size = 20
 
 [node name="CloseButton" type="Button" parent="Panel/VBoxContainer/TitleBar"]
-custom_minimum_size = Vector2(32, 32)
+custom_minimum_size = Vector2(28, 28)
 layout_mode = 2
 text = "X"
 
@@ -68,68 +68,49 @@ layout_mode = 2
 [node name="ContentArea" type="HBoxContainer" parent="Panel/VBoxContainer"]
 layout_mode = 2
 size_flags_vertical = 3
+theme_override_constants/separation = 16
 
-[node name="CategoryPanel" type="Panel" parent="Panel/VBoxContainer/ContentArea"]
-custom_minimum_size = Vector2(150, 0)
-layout_mode = 2
-
-[node name="CategoryList" type="ItemList" parent="Panel/VBoxContainer/ContentArea/CategoryPanel"]
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-offset_left = 8.0
-offset_top = 8.0
-offset_right = -8.0
-offset_bottom = -8.0
-
-[node name="ItemPanel" type="Panel" parent="Panel/VBoxContainer/ContentArea"]
-layout_mode = 2
-size_flags_horizontal = 3
-
-[node name="ScrollContainer" type="ScrollContainer" parent="Panel/VBoxContainer/ContentArea/ItemPanel"]
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-offset_left = 8.0
-offset_top = 8.0
-offset_right = -8.0
-offset_bottom = -8.0
-
-[node name="ItemGrid" type="GridContainer" parent="Panel/VBoxContainer/ContentArea/ItemPanel/ScrollContainer"]
+[node name="ItemGrid" type="GridContainer" parent="Panel/VBoxContainer/ContentArea"]
 layout_mode = 2
 size_flags_horizontal = 3
 columns = 6
+theme_override_constants/h_separation = 4
+theme_override_constants/v_separation = 4
 
-[node name="InfoPanel" type="Panel" parent="Panel/VBoxContainer/ContentArea"]
+[node name="VSeparator" type="VSeparator" parent="Panel/VBoxContainer/ContentArea"]
+layout_mode = 2
+
+[node name="RefineryPanel" type="VBoxContainer" parent="Panel/VBoxContainer/ContentArea"]
 custom_minimum_size = Vector2(180, 0)
 layout_mode = 2
+theme_override_constants/separation = 8
 
-[node name="VBoxContainer" type="VBoxContainer" parent="Panel/VBoxContainer/ContentArea/InfoPanel"]
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-offset_left = 12.0
-offset_top = 12.0
-offset_right = -12.0
-offset_bottom = -12.0
-
-[node name="InfoTitle" type="Label" parent="Panel/VBoxContainer/ContentArea/InfoPanel/VBoxContainer"]
+[node name="RefineryLabel" type="Label" parent="Panel/VBoxContainer/ContentArea/RefineryPanel"]
 layout_mode = 2
-text = "Item Info"
-theme_override_font_sizes/font_size = 16
-
-[node name="HSeparator" type="HSeparator" parent="Panel/VBoxContainer/ContentArea/InfoPanel/VBoxContainer"]
-layout_mode = 2
-
-[node name="ItemNameLabel" type="Label" parent="Panel/VBoxContainer/ContentArea/InfoPanel/VBoxContainer"]
-layout_mode = 2
-text = "Select an item"
+text = "Backpack Refinery"
 theme_override_font_sizes/font_size = 14
+horizontal_alignment = 1
 
-[node name="ItemCountLabel" type="Label" parent="Panel/VBoxContainer/ContentArea/InfoPanel/VBoxContainer"]
+[node name="InputSlot" type="Panel" parent="Panel/VBoxContainer/ContentArea/RefineryPanel"]
+custom_minimum_size = Vector2(64, 64)
 layout_mode = 2
-text = ""
-theme_override_font_sizes/font_size = 12
+size_flags_horizontal = 4
+
+[node name="ProcessButton" type="Button" parent="Panel/VBoxContainer/ContentArea/RefineryPanel"]
+custom_minimum_size = Vector2(0, 32)
+layout_mode = 2
+text = "REFINE ALL"
+
+[node name="ProgressBar" type="ProgressBar" parent="Panel/VBoxContainer/ContentArea/RefineryPanel"]
+custom_minimum_size = Vector2(0, 20)
+layout_mode = 2
+max_value = 1.0
+value = 0.0
+show_percentage = false
+
+[node name="StatusLabel" type="Label" parent="Panel/VBoxContainer/ContentArea/RefineryPanel"]
+layout_mode = 2
+text = "Select dirt, click input slot"
+theme_override_font_sizes/font_size = 11
+horizontal_alignment = 1
+autowrap_mode = 2

@@ -49,10 +49,10 @@ func _check_player_pickup() -> void:
 	var bodies := pickup_area.get_overlapping_bodies()
 	for body in bodies:
 		if body is CharacterBody3D:
-			# Find the hotbar and add to it.
-			var hotbar := get_tree().current_scene.get_node_or_null("Hotbar")
-			if hotbar and hotbar.has_method("add_block"):
-				hotbar.add_block(block_type, 1)
+			# Find the inventory UI and add to it.
+			var inv_ui := _find_inventory_ui()
+			if inv_ui:
+				inv_ui.add_block(block_type, 1)
 			collected = true
 			_play_pickup_sound()
 			queue_free()
@@ -171,13 +171,22 @@ func _on_pickup_area_body_entered(body: Node) -> void:
 	
 	# Check if it's the player.
 	if body is CharacterBody3D:
-		# Find the hotbar and add to it.
-		var hotbar := get_tree().current_scene.get_node_or_null("Hotbar")
-		if hotbar and hotbar.has_method("add_block"):
-			hotbar.add_block(block_type, 1)
+		# Find the inventory UI and add to it.
+		var inv_ui := _find_inventory_ui()
+		if inv_ui:
+			inv_ui.add_block(block_type, 1)
 		collected = true
 		_play_pickup_sound()
 		queue_free()
+
+
+func _find_inventory_ui() -> Control:
+	var main := get_tree().current_scene
+	if main:
+		for child in main.get_children():
+			if child.has_method("add_block") and child.has_method("can_place_block"):
+				return child
+	return null
 
 
 func _play_pickup_sound() -> void:

@@ -10,7 +10,7 @@ const BlockTypes = preload("res://Data/BlockTypes.gd")
 # References set by main scene.
 var camera: Camera3D
 var voxel_world: Node3D
-var hotbar: Control
+var inventory_ui: Control
 
 # Current target block info.
 var target_block_pos: Vector3i = Vector3i(-9999, -9999, -9999)
@@ -21,28 +21,34 @@ var has_target: bool = false
 var highlight_mesh: MeshInstance3D
 var highlight_material: StandardMaterial3D
 
-# Currently selected block type to place (updated by hotbar).
+# Currently selected block type to place (updated by inventory).
 var selected_block: int = BlockTypes.BLOCK_DIRT
 
 
 func _ready() -> void:
 	_create_highlight_mesh()
-	# Connect to hotbar if available.
+	# Connect to inventory if available.
 	await get_tree().process_frame
-	_connect_hotbar()
+	_connect_inventory()
 
 
-func _connect_hotbar() -> void:
-	hotbar = get_node_or_null("/root/Main/Hotbar")
-	if hotbar:
-		print("Hotbar connected!")
-		hotbar.slot_selected.connect(_on_hotbar_slot_selected)
-		selected_block = hotbar.get_selected_block()
+func _connect_inventory() -> void:
+	# Find the inventory UI (added as child of main scene).
+	var main := get_tree().current_scene
+	if main:
+		for child in main.get_children():
+			if child.has_method("add_block") and child.has_method("can_place_block"):
+				inventory_ui = child
+				break
+	if inventory_ui:
+		print("Inventory connected!")
+		if inventory_ui.has_signal("block_selected"):
+			inventory_ui.block_selected.connect(_on_inventory_block_selected)
 	else:
-		print("WARNING: Hotbar not found at /root/Main/Hotbar")
+		print("WARNING: Inventory UI not found")
 
 
-func _on_hotbar_slot_selected(_slot_index: int, block_id: int) -> void:
+func _on_inventory_block_selected(block_id: int) -> void:
 	selected_block = block_id
 
 
@@ -182,11 +188,8 @@ func _break_block() -> void:
 	voxel_world.set_block_global(target_block_pos.x, target_block_pos.y, target_block_pos.z, BlockTypes.BLOCK_AIR)
 	
 	# Add to inventory.
-	if hotbar and block_id != BlockTypes.BLOCK_AIR:
-		print("Adding block to inventory: ", block_id)
-		hotbar.add_block(block_id)
-	elif hotbar == null:
-		print("WARNING: hotbar is null, cannot add block")
+	if inventory_ui and block_id != BlockTypes.BLOCK_AIR:
+		inventory_ui.add_block(block_id)
 
 
 func _place_block() -> void:
@@ -194,9 +197,9 @@ func _place_block() -> void:
 		return
 	
 	# Check if we have blocks to place.
-	if hotbar == null:
+	if inventory_ui == null:
 		return
-	if not hotbar.can_place_block():
+	if not inventory_ui.can_place_block():
 		return
 	
 	# Calculate position for new block (adjacent to target in direction of normal).
@@ -217,6 +220,6 @@ func _place_block() -> void:
 			return  # Would place inside player.
 	
 	# Remove from inventory and place the selected block.
-	if hotbar:
-		hotbar.remove_block(selected_block)
+	if inventory_ui:
+		inventory_ui.remove_selected_block()
 	voxel_world.set_block_global(place_pos.x, place_pos.y, place_pos.z, selected_block)

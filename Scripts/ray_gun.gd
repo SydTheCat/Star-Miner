@@ -3,6 +3,7 @@ extends Node3D
 # Simple ray gun held by the player.
 # Creates a retro sci-fi style gun using basic meshes.
 
+var is_equipped: bool = false
 var is_firing: bool = false
 var is_firing_alt: bool = false
 var beam_particles: GPUParticles3D
@@ -38,9 +39,27 @@ func _ready() -> void:
 	_create_alt_particles()
 	_create_fire_sound()
 	base_position = position
+	# Start unequipped.
+	unequip()
+
+
+func equip() -> void:
+	is_equipped = true
+	visible = true
+
+
+func unequip() -> void:
+	is_equipped = false
+	visible = false
+	if is_firing:
+		_stop_firing()
+	if is_firing_alt:
+		_stop_firing_alt()
 
 
 func _process(delta: float) -> void:
+	if not is_equipped:
+		return
 	# Don't fire when mouse is not captured (inventory open, etc).
 	var can_fire := Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED
 	

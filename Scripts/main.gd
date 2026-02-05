@@ -99,18 +99,18 @@ func _ready() -> void:
 	# Create debug UI.
 	_create_debug_ui()
 	
-	# Connect to hotbar.
+	# Connect to hotbar (tools/weapons only).
 	hotbar = $Hotbar
-	if hotbar:
-		hotbar.slot_selected.connect(_on_hotbar_slot_selected)
-		hotbar.item_dropped_to_hotbar.connect(_on_item_dropped_to_hotbar)
+	hotbar.set_slot_tool(0, "Multitool")
+	hotbar.slot_selected.connect(_on_hotbar_slot_selected)
 	
-	# Create inventory UI.
+	# Create inventory UI (blocks go here).
 	inventory_ui = INVENTORY_UI_SCENE.instantiate()
 	add_child(inventory_ui)
 	inventory_ui.set_player(player)
 	inventory_ui.inventory_opened.connect(_on_inventory_opened)
 	inventory_ui.inventory_closed.connect(_on_inventory_closed)
+	inventory_ui.block_selected.connect(_on_inventory_block_selected)
 	
 	# Create cloud layer.
 	_create_clouds()
@@ -125,7 +125,7 @@ func _ready() -> void:
 	_create_placement_cursor()
 
 
-func _on_hotbar_slot_selected(_slot_index: int, block_id: int) -> void:
+func _on_inventory_block_selected(block_id: int) -> void:
 	selected_block = block_id
 
 
@@ -135,19 +135,18 @@ func _on_inventory_opened() -> void:
 
 
 func _on_inventory_closed() -> void:
-	# Resume game interactions.
-	# Refresh hotbar display to show current inventory counts.
-	if hotbar:
-		for i in range(hotbar.SLOT_COUNT):
-			hotbar._update_slot_display(i)
+	# Update selected block from inventory selection.
+	if inventory_ui:
+		selected_block = inventory_ui.get_selected_block()
 
 
-func _on_item_dropped_to_hotbar(block_id: int, slot_index: int) -> void:
-	# Item was dragged from inventory to hotbar slot.
-	# The hotbar slot is now set to this block type.
-	# Update the hotbar display.
-	if hotbar:
-		hotbar._update_slot_display(slot_index)
+func _on_hotbar_slot_selected(slot_index: int, tool_name: String) -> void:
+	var ray_gun: Node3D = player.get_node_or_null("Head/Camera3D/RayGun")
+	if ray_gun:
+		if tool_name == "Multitool":
+			ray_gun.equip()
+		else:
+			ray_gun.unequip()
 
 
 func _create_placement_cursor() -> void:
@@ -665,10 +664,20 @@ func _update_target_block() -> void:
 	has_target = true
 
 
+func _has_tool_equipped() -> bool:
+	if hotbar == null:
+		return false
+	return hotbar.get_selected_tool() != ""
+
+
 func _handle_continuous_breaking(delta: float) -> void:
 	# Decrease cooldown.
 	if break_cooldown > 0.0:
 		break_cooldown -= delta
+	
+	# Can only break blocks with a tool equipped.
+	if not _has_tool_equipped():
+		return
 	
 	# Check for continuous breaking while holding the button.
 	if Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED and has_target:
@@ -713,8 +722,8 @@ func _break_block() -> void:
 		drop_id = BlockTypes.BLOCK_DIRT
 	
 	# Add to inventory.
-	if hotbar:
-		hotbar.add_block(drop_id)
+	if inventory_ui:
+		inventory_ui.add_block(drop_id)
 
 
 func _spawn_break_particles(pos: Vector3, block_id: int) -> void:
@@ -746,9 +755,9 @@ func _place_block() -> void:
 		return
 	
 	# Check if we have blocks to place.
-	if hotbar == null:
+	if inventory_ui == null:
 		return
-	if not hotbar.can_place_block():
+	if not inventory_ui.can_place_block():
 		return
 	
 	var place_pos := target_block_pos + Vector3i(
@@ -766,7 +775,7 @@ func _place_block() -> void:
 		return
 	
 	# Remove from inventory and place the block.
-	hotbar.remove_block(selected_block)
+	inventory_ui.remove_selected_block()
 	
 	# Encode rotation: y_rot * 4 + x_rot, where each is 0-3 for 0/90/180/270 degrees.
 	var x_rot := int(block_rotation.x / 90.0) % 4
